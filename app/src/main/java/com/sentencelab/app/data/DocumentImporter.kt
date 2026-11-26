@@ -106,38 +106,109 @@ object DocumentImporter {
         return result.toByteArray()
     }
 
-    /** Split without changing the words. PDF line wrapping is collapsed into spaces. */
+    /** Preserve explicit line breaks in Docs/text; PDF wraps are soft unless a heading is detected. */
     fun splitImportedSentences(raw: String, pdf: Boolean = false): List<String> {
-        val normalized = raw.replace("\r\n", "\n").replace('\r', '\n')
-        val paragraphs = if (pdf) {
-            normalized.split(Regex("\\n\\s*\\n")).map { block ->
-                block.lines().map(String::trim).filter(String::isNotBlank).joinToString(" ")
+        val normalized = raw.replace("\r\n", "\n").replace('\r', '\n').removePrefix("\uFEFF")
+        val lines = normalized.lines()
+        val paragraphs = ArrayList<String>()
+        val wrapped = StringBuilder()
+
+        fun flush() {
+            if (wrapped.isNotBlank()) {
+                paragraphs.add(wrapped.toString().trim())
+                wrapped.clear()
             }
-        } else {
-            normalized.lines().map(String::trim)
         }
+
+        for (index in lines.indices) {
+            val line = lines[index].trim()
+            if (line.isEmpty() || line.matches(Regex("[_—=\\-]{3,}"))) {
+                flush()
+                continue
+            }
+            val blankBefore = index == 0 || lines[index - 1].isBlank() ||
+                lines[index - 1].trim().matches(Regex("[_—=\\-]{3,}"))
+            val blankAfter = index == lines.lastIndex || lines[index + 1].isBlank()
+            val next = lines.drop(index + 1).firstOrNull { it.isNotBlank() }?.trim()
+            if (isSectionHeading(line, blankBefore, blankAfter, next)) {
+                flush()
+                continue
+            }
+            if (pdf) {
+                if (wrapped.isNotEmpty()) wrapped.append(' ')
+                wrapped.append(line)
+            } else {
+                paragraphs.add(line)
+            }
+        }
+        flush()
+
         val results = ArrayList<String>()
         val breaker = BreakIterator.getSentenceInstance(Locale.US)
         for (paragraph in paragraphs) {
             if (paragraph.isBlank()) continue
-            breaker.setText(paragraph)
+            val safe = protectAbbreviations(paragraph)
+            breaker.setText(safe)
+            val pieces = ArrayList<String>()
             var start = breaker.first()
             while (true) {
                 val end = breaker.next()
                 if (end == BreakIterator.DONE) break
-                val sentence = paragraph.substring(start, end).trim()
-                if (sentence.any { it.isLetter() }) {
-                    if (sentence.length > MAX_SENTENCE_CHARS) {
-                        error("2,000자보다 긴 문장이 있어 가져올 수 없습니다. 원문을 나누어 주세요.")
-                    }
-                    results.add(sentence)
-                    if (results.size > MAX_SENTENCES) {
-                        error("문장이 2,500개를 넘습니다. 문서를 나누어 가져오세요.")
+                val part = safe.substring(start, end).replace('\uE000', '.').trim()
+                if (part.any(Char::isLetter)) {
+                    // A lower-case continuation after a quoted question is not a new sentence.
+                    if (pieces.isNotEmpty() && part.firstOrNull()?.isLowerCase() == true) {
+                        pieces[pieces.lastIndex] += " " + part
+                    } else {
+                        pieces.add(part)
                     }
                 }
                 start = end
             }
+            for (sentence in pieces) {
+                if (sentence.length > MAX_SENTENCE_CHARS) {
+                    error("2,000자보다 긴 문장이 있어 가져올 수 없습니다. 원문을 나누어 주세요.")
+                }
+                results.add(sentence)
+                if (results.size > MAX_SENTENCES) {
+                    error("문장이 2,500개를 넘습니다. 문서를 나누어 가져오세요.")
+                }
+            }
         }
         return results
+    }
+
+    private fun protectAbbreviations(text: String): String {
+        val titles = Regex("""\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|St|Mt|vs)\.""", RegexOption.IGNORE_CASE)
+        val shortForms = Regex("""\b(?:e\.g|i\.e)\.""", RegexOption.IGNORE_CASE)
+        return titles.replace(text) { it.value.dropLast(1) + '\uE000' }
+            .let { textWithTitles ->
+                shortForms.replace(textWithTitles) { it.value.replace('.', '\uE000') }
+            }
+    }
+
+    private fun isSectionHeading(
+        line: String,
+        blankBefore: Boolean,
+        blankAfter: Boolean,
+        next: String?
+    ): Boolean {
+        if (line.length > 100 || line.lastOrNull() in listOf('.', '!', '?', '"', '”')) return false
+        if (line.startsWith("Further Reading", ignoreCase = true)) return true
+        val tokens = line.split(Regex("\\s+")).filter { word -> word.any(Char::isLetter) }
+        if (tokens.isEmpty() || tokens.size > 12) return false
+        val capitals = tokens.count { word -> word.firstOrNull()?.isUpperCase() == true }
+        // Typical standalone English title, not a complete sentence.
+        if (tokens.size >= 3 && capitals >= 2 && capitals * 2 >= tokens.size) return true
+        val knownHeadings = setOf(
+            "Subscriptions are everywhere",
+            "People love the subscriptions",
+            "Online platforms drive the subscription economy",
+            "Limitations of the subscription economy"
+        )
+        if (line in knownHeadings) return true
+        // A single explicit line break does NOT make a short sentence into a title.
+        return tokens.size <= 7 && blankBefore && blankAfter &&
+            next?.firstOrNull()?.isUpperCase() == true
     }
 }

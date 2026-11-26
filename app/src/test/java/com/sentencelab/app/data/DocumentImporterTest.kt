@@ -23,6 +23,49 @@ class DocumentImporterTest {
     }
 
     @Test
+    fun academicTitlesAreNotMergedWithTheFirstSentence() {
+        val doc = "The Subscription Economy: From Ownership to Access\n\n" +
+            "Jiyun starts her day by listening to music.\n" +
+            "She learns through online videos."
+        assertEquals(
+            listOf("Jiyun starts her day by listening to music.", "She learns through online videos."),
+            DocumentImporter.splitImportedSentences(doc)
+        )
+    }
+
+    @Test
+    fun pdfHeadingsDoNotAttachToBodyText() {
+        val pdf = "Online platforms drive the subscription economy\n" +
+            "With the development of digital devices,\n" +
+            "consumers can do many things easily."
+        assertEquals(
+            listOf("With the development of digital devices, consumers can do many things easily."),
+            DocumentImporter.splitImportedSentences(pdf, pdf = true)
+        )
+    }
+
+    @Test
+    fun doctorAbbreviationDoesNotSplitTheSentence() {
+        val text = "According to Dr. Carlos Duarte, the ocean stores carbon."
+        assertEquals(listOf(text), DocumentImporter.splitImportedSentences(text))
+    }
+
+    @Test
+    fun quotedQuestionBeforeLowerCaseReportingClauseStaysTogether() {
+        val text = "When she asked, \"Is it safe?\" he replied, \"Yes.\""
+        assertEquals(listOf(text), DocumentImporter.splitImportedSentences(text))
+    }
+
+    @Test
+    fun linesWithoutTerminalPunctuationStillSplitInTextDocuments() {
+        val text = "I like music\nYou enjoy reading"
+        assertEquals(
+            listOf("I like music", "You enjoy reading"),
+            DocumentImporter.splitImportedSentences(text)
+        )
+    }
+
+    @Test
     fun blankLinesAreIgnored() {
         assertTrue(DocumentImporter.splitImportedSentences("  \n\n").isEmpty())
     }
