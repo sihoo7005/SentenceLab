@@ -64,3 +64,15 @@ GitHub Actions Secrets 설정에 다음 두 항목을 추가해야 고정 서명
 기기에서 SSH 접속할 수 있다면 비밀값을 채팅에 붙여넣지 않고 GitHub CLI로 직접 설정할 수 있습니다.
 설정 전에는 GitHub Actions에서 일반 임시 디버그 키로 서명합니다.
 향후 APK 업데이트에 필요한 개인 키이므로 외부 노출을 피하고 안전하게 백업하세요.
+
+## 등록된 공개 Google OAuth 웹 클라이언트 ID
+
+227216295282-m8plkfc50dj35reb9ruhklaec6uaucf1.apps.googleusercontent.com
+
+이 값은 공개 ID이며 비밀번호나 클라이언트 보안 비밀번호가 아닙니다.
+Android APK 빌드에 반영됐고, Oracle에서는 `server/run_local.py`가 별도의
+`public-config.json` 파일을 읽어 서버 프로세스에 적용합니다.
+
+실제 로그인에는 Android OAuth 클라이언트의 서명 SHA-1 등록과 유효한 HTTPS API 주소가
+추가로 필요합니다. GitHub Actions Variables의 `API_BASE_URL`을 설정하고
+고정 서명 Secrets를 등록해야 합니다.

@@ -1,6 +1,7 @@
 """Start the SentenceLab API locally for testing, without public exposure."""
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -14,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 VENV = HERE / ".venv" / "bin" / "python"
 PID = HERE / "api.pid"
 LOG = HERE / "api.log"
+PUBLIC_CONFIG = HERE / "public-config.json"
 HOST = "127.0.0.1"
 PORT = 8765
 
@@ -41,6 +43,12 @@ def main() -> int:
         return 0 if health() else 1
     oldmask = os.umask(0o077)
     try:
+        process_env = os.environ.copy()
+        if PUBLIC_CONFIG.is_file():
+            oauth = json.loads(PUBLIC_CONFIG.read_text(encoding="utf-8"))
+            client_id = oauth.get("google_web_client_id", "").strip()
+            if client_id:
+                process_env["GOOGLE_WEB_CLIENT_ID"] = client_id
         with LOG.open("ab") as log:
             process = subprocess.Popen(
                 [str(VENV), "-m", "uvicorn", "app:app", "--host", HOST,
@@ -51,6 +59,7 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
                 close_fds=True,
+                env=process_env,
             )
         PID.write_text(str(process.pid) + "\n")
         for _ in range(18):
