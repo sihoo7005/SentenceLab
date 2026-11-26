@@ -105,7 +105,8 @@ fun SentenceLabApp() {
                 selected == null -> HomeScreen(
                     sets = sets,
                     onCreate = { newSetOpen = true },
-                    onOpen = { currentSetId = it }
+                    onOpen = { currentSetId = it },
+                    onRestore = { save(it) }
                 )
                 studyMode != null -> StudyScreen(
                     set = selected,
@@ -241,12 +242,14 @@ fun SentenceLabApp() {
 private fun HomeScreen(
     sets: List<StudySet>,
     onCreate: () -> Unit,
-    onOpen: (String) -> Unit
+    onOpen: (String) -> Unit,
+    onRestore: (List<StudySet>) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        CloudAccountPanel(sets = sets, onRestore = onRestore)
         Text("내 문장 세트", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("네트워크 연결 없이 모든 학습 내용을 기기에 저장합니다.")
         Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) { Text("+ 새 세트") }
