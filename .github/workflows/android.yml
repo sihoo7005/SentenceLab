@@ -64,6 +64,20 @@ jobs:
           echo "SENTENCELAB_SIGNING_STORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
           echo "Stable APK signing enabled."
 
+      - name: Verify stable signing keystore
+        if: env.SENTENCELAB_SIGNING_STORE_FILE != ''
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.SENTENCELAB_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keytool -list \
+            -keystore "$SENTENCELAB_SIGNING_STORE_FILE" \
+            -storetype PKCS12 \
+            -storepass:env KEYSTORE_PASSWORD \
+            -alias sentencelab > /dev/null
+          echo "Stable signing keystore password and alias verified."
+
       - name: Run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
 
