@@ -26,8 +26,8 @@ android {
         applicationId = "com.sentencelab.app"
         minSdk = 26
         targetSdk = 35
-        versionName = "0.5.0"
-        versionCode = 5
+        versionName = "0.6.0"
+        versionCode = 6
         val webClientId = providers.gradleProperty("GOOGLE_WEB_CLIENT_ID").orElse("").get()
         val apiBaseUrl = providers.gradleProperty("API_BASE_URL").orElse("").get()
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
@@ -70,6 +70,8 @@ dependencies {
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+    implementation("com.google.mlkit:translate:17.0.3")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")

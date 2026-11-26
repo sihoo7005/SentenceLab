@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sentencelab.app.data.DocumentImporter
 import com.sentencelab.app.data.ImportedDocument
+import com.sentencelab.app.data.KoreanTranslator
 import com.sentencelab.app.data.StudyStorage
 import com.sentencelab.app.cloud.CloudSession
 import com.sentencelab.app.cloud.StudySync
@@ -71,6 +72,8 @@ import com.sentencelab.app.model.eligibleForStudy
 import com.sentencelab.app.model.validChunks
 import java.util.Locale
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -107,6 +110,11 @@ fun SentenceLabApp() {
     var fileImportBusy by remember { mutableStateOf(false) }
     var fileImportPreview by remember { mutableStateOf<ImportedDocument?>(null) }
     var fileImportMessage by remember { mutableStateOf<String?>(null) }
+    var translationBusy by remember { mutableStateOf(false) }
+    var translationProgress by remember { mutableStateOf("") }
+    var translationNotice by remember { mutableStateOf<String?>(null) }
+    var translationJob by remember { mutableStateOf<Job?>(null) }
+    var autoTranslationAttempted by remember { mutableStateOf<Set<String>>(emptySet()) }
     val documentPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -129,6 +137,65 @@ fun SentenceLabApp() {
         storage.save(updated)
         sets = updated
         syncSignals.tryEmit(Unit)
+    }
+
+    fun translateMissing(setId: String, cards: List<Sentence>) {
+        val pending = KoreanTranslator.missing(cards)
+        if (pending.isEmpty()) {
+            translationNotice = "자동 번역할 영어 문장이 없습니다."
+            return
+        }
+        if (translationBusy) {
+            translationNotice = "다른 세트의 번역이 진행 중입니다. 완료 후 다시 시도하세요."
+            return
+        }
+        translationBusy = true
+        translationProgress = "번역 모델을 준비하고 있습니다. 최초 실행 시 다운로드가 필요합니다."
+        translationJob = scope.launch {
+            try {
+                val (translated, failed) = KoreanTranslator.fillMissing(
+                    pending,
+                    onProgress = { finished, total ->
+                        translationProgress = "문장 번역 중: " + finished + " / " + total
+                    },
+                    onBatch = { results ->
+                        if (results.isNotEmpty()) {
+                            save(sets.map { group ->
+                                if (group.id != setId) group
+                                else group.copy(cards = group.cards.map { card ->
+                                    val korean = results[card.id]
+                                    if (korean != null && card.korean.isBlank()) {
+                                        card.copy(korean = korean)
+                                    } else card
+                                })
+                            })
+                        }
+                    }
+                )
+                translationNotice = "한국어 해석 " + translated + "개 자동 입력 완료" +
+                    if (failed > 0) " · 실패 " + failed + "개" else ""
+            } catch (cancelled: CancellationException) {
+                translationNotice = "자동 번역을 중단했습니다. 완료된 해석은 그대로 저장됩니다."
+            } catch (e: Exception) {
+                translationNotice = "번역에 실패했습니다: " +
+                    (e.localizedMessage ?: "번역 모델 다운로드나 네트워크를 확인하세요.") +
+                    " · 영어 원문은 유지됩니다."
+            } finally {
+                translationBusy = false
+                translationJob = null
+            }
+        }
+    }
+
+    LaunchedEffect(currentSetId) {
+        val id = currentSetId ?: return@LaunchedEffect
+        if (id !in autoTranslationAttempted && !translationBusy) {
+            autoTranslationAttempted = autoTranslationAttempted + id
+            val untranslated = sets.firstOrNull { it.id == id }?.cards.orEmpty()
+            if (KoreanTranslator.missing(untranslated).isNotEmpty()) {
+                translateMissing(id, untranslated)
+            }
+        }
     }
 
     LaunchedEffect(sessionToken) {
@@ -241,6 +308,9 @@ fun SentenceLabApp() {
                     onDeleteCard = { deletingCard = it },
                     onDeleteSet = { deletingSet = true },
                     onDirectStudy = { card -> directStudyCardId = card.id },
+                    onTranslateMissing = {
+                        translateMissing(selected.id, selected.cards)
+                    },
                     onStudy = { mode, reviewOnly ->
                         sessionIds = eligibleForStudy(selected.cards, mode, reviewOnly)
                             .map { it.id }
@@ -281,6 +351,28 @@ fun SentenceLabApp() {
         )
     }
 
+    if (translationBusy) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("한국어 자동 해석") },
+            text = { Text(translationProgress) },
+            confirmButton = {
+                TextButton(onClick = { translationJob?.cancel() }) { Text("중단") }
+            }
+        )
+    }
+    val translationResult = translationNotice
+    if (translationResult != null && !translationBusy) {
+        AlertDialog(
+            onDismissRequest = { translationNotice = null },
+            title = { Text("자동 번역 결과") },
+            text = { Text(translationResult) },
+            confirmButton = {
+                TextButton(onClick = { translationNotice = null }) { Text("확인") }
+            }
+        )
+    }
+
     if (fileImportBusy) {
         AlertDialog(
             onDismissRequest = {},
@@ -301,7 +393,7 @@ fun SentenceLabApp() {
                     Text("읽은 문장: " + importedFile.sentences.size + "개")
                     Text("미리보기")
                     Text(importedFile.sentences.take(2).joinToString("\n\n"), maxLines = 7)
-                    Text("영어 원문은 그대로 저장합니다. 한국어 해석은 나중에 문장 수정에서 입력할 수 있습니다.")
+                    Text("영어 원문을 저장한 뒤 한국어 해석을 자동으로 생성합니다. 기존 해석은 덮어쓰지 않습니다.")
                 }
             },
             confirmButton = {
@@ -326,9 +418,10 @@ fun SentenceLabApp() {
                                 if (group.id == targetId) group.copy(cards = group.cards + added)
                                 else group
                             })
+                            if (targetId != null) translateMissing(targetId, added)
+                        } else {
+                            fileImportMessage = "중복 문장을 제외하면 새로 추가할 문장이 없습니다."
                         }
-                        fileImportMessage = added.size.toString() +
-                            "개 문장을 내 세트에 추가했습니다. 로그인 상태면 자동 동기화됩니다."
                     }
                     fileImportPreview = null
                 }) { Text("가져오기") }
@@ -396,6 +489,7 @@ fun SentenceLabApp() {
                         else set.cards.map { if (it.id == result.id) result else it })
                 })
                 editorOpen = false
+                if (result.korean.isBlank()) translateMissing(selected.id, listOf(result))
             }
         )
     }
@@ -503,6 +597,7 @@ private fun SetScreen(
     onDeleteCard: (Sentence) -> Unit,
     onDeleteSet: () -> Unit,
     onDirectStudy: (Sentence) -> Unit,
+    onTranslateMissing: () -> Unit,
     onStudy: (StudyMode, Boolean) -> Unit
 ) {
     Column(
@@ -513,6 +608,10 @@ private fun SetScreen(
             Button(onClick = onAdd) { Text("+ 문장 추가") }
             OutlinedButton(onClick = onImport) { Text("대량 등록") }
             OutlinedButton(onClick = onImportFile) { Text("Drive / PDF 가져오기") }
+            OutlinedButton(
+                onClick = onTranslateMissing,
+                enabled = KoreanTranslator.missing(set.cards).isNotEmpty()
+            ) { Text("빈 한국어 해석 자동 채우기") }
         }
         Text("학습 모드 · 미완료 " + set.cards.count { !it.completed } + "개",
             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
