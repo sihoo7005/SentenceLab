@@ -101,7 +101,8 @@ class CloudApi {
                         chunks = (0 until pieces.length()).map(pieces::getString),
                         attempts = card.getInt("attempts"),
                         correct = card.getInt("correct"),
-                        needsReview = card.getBoolean("needsReview")
+                        needsReview = card.getBoolean("needsReview"),
+                        completed = card.optBoolean("completed", card.optInt("attempts") > 0)
                     )
                 }
             )
@@ -121,7 +122,8 @@ class CloudApi {
                     .put("chunks", JSONArray(card.chunks))
                     .put("attempts", card.attempts)
                     .put("correct", card.correct)
-                    .put("needsReview", card.needsReview))
+                    .put("needsReview", card.needsReview)
+                    .put("completed", card.completed))
             }
             groups.put(JSONObject().put("id", set.id).put("title", set.title).put("cards", cards))
         }

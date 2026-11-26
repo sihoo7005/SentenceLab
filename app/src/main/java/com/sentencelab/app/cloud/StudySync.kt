@@ -48,7 +48,11 @@ object StudyMerge {
     }
 
     private fun mergeCard(base: Sentence?, local: Sentence?, remote: Sentence?): Sentence? {
-        if (base == null) return local ?: remote
+        if (base == null) return when {
+            local == null -> remote
+            remote == null -> local
+            else -> local.copy(completed = local.completed || remote.completed)
+        }
         if (local == null && remote == null) return null
         if (local == null) return if (remote == base) null else remote
         if (remote == null) return if (local == base) null else local
@@ -66,7 +70,8 @@ object StudyMerge {
             chunks = if (local.chunks != base.chunks) local.chunks else remote.chunks,
             attempts = newAttempts,
             correct = newCorrect.coerceAtMost(newAttempts),
-            needsReview = if (local.needsReview != base.needsReview) local.needsReview else remote.needsReview
+            needsReview = if (local.needsReview != base.needsReview) local.needsReview else remote.needsReview,
+            completed = local.completed || remote.completed
         )
     }
 }

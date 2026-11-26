@@ -85,6 +85,7 @@ def init_db():
                     attempts INTEGER NOT NULL DEFAULT 0,
                     correct INTEGER NOT NULL DEFAULT 0,
                     needs_review INTEGER NOT NULL DEFAULT 0,
+                    completed INTEGER NOT NULL DEFAULT 0,
                     position INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sentences_set_order ON sentences(set_id,position);
@@ -115,6 +116,12 @@ def init_db():
                     PRIMARY KEY (set_id,email)
                 );
             """)
+            # Preserve existing study rows while adding the completion flag.
+            sentence_fields = {row["name"] for row in conn.execute("PRAGMA table_info(sentences)")}
+            if "completed" not in sentence_fields:
+                conn.execute("ALTER TABLE sentences ADD COLUMN completed INTEGER NOT NULL DEFAULT 0")
+                # Older clients recorded completed attempts without a separate flag.
+                conn.execute("UPDATE sentences SET completed=1 WHERE attempts>0")
             # Migrate existing accounts without changing stable IDs or study data.
             user_fields = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
             if "email" not in user_fields:
@@ -156,6 +163,7 @@ class SentenceIn(BaseModel):
     attempts: int = Field(ge=0, le=1_000_000)
     correct: int = Field(ge=0, le=1_000_000)
     needsReview: bool
+    completed: bool | None = None
 
     @field_validator("chunks")
     @classmethod
@@ -320,6 +328,7 @@ def get_snapshot(user_id: int = Depends(session_user)):
                 "attempts": s["attempts"],
                 "correct": s["correct"],
                 "needsReview": bool(s["needs_review"]),
+                "completed": bool(s["completed"]),
             } for s in sentence_rows]
             result.append({"id": group["id"], "title": group["title"], "cards": cards})
     return {"revision": revision, "sets": result}
@@ -350,7 +359,7 @@ def get_curated_library(user_id: int = Depends(session_user)):
                     "english": card["english"],
                     "korean": card["korean"],
                     "chunks": json.loads(card["chunks_json"]),
-                    "attempts": 0, "correct": 0, "needsReview": False,
+                    "attempts": 0, "correct": 0, "needsReview": False, "completed": False,
                 } for card in cards],
             })
     return {"sets": result}
@@ -373,6 +382,14 @@ def put_snapshot(body: SnapshotIn, user_id: int = Depends(session_user)):
             ).fetchone()["revision"]
             if current != body.base_revision:
                 raise HTTPException(409, "Revision conflict; download latest snapshot first")
+            # Older APKs may omit 'completed'. Preserve existing completion in that case.
+            prior_completion = {
+                row["id"]: bool(row["completed"])
+                for row in conn.execute(
+                    "SELECT s.id,s.completed FROM sentences AS s "
+                    "JOIN sets AS g ON g.id=s.set_id WHERE g.user_id=?", (user_id,)
+                )
+            }
             conn.execute("DELETE FROM sets WHERE user_id=?", (user_id,))
             for i, group in enumerate(body.sets):
                 conn.execute(
@@ -382,11 +399,12 @@ def put_snapshot(body: SnapshotIn, user_id: int = Depends(session_user)):
                 for j, card in enumerate(group.cards):
                     conn.execute(
                         """INSERT INTO sentences
-                        (id,set_id,english,korean,chunks_json,attempts,correct,needs_review,position)
-                        VALUES (?,?,?,?,?,?,?,?,?)""",
+                        (id,set_id,english,korean,chunks_json,attempts,correct,needs_review,completed,position)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
                         (card.id, group.id, card.english, card.korean,
                          json.dumps(card.chunks, ensure_ascii=False), card.attempts,
-                         card.correct, int(card.needsReview), j),
+                         card.correct, int(card.needsReview), int(card.completed if card.completed is not None
+                         else prior_completion.get(card.id, card.attempts > 0)), j),
                     )
             conn.execute("UPDATE users SET revision=revision+1 WHERE id=?", (user_id,))
             conn.execute("COMMIT")

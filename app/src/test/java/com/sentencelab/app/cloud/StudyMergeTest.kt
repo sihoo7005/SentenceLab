@@ -60,4 +60,27 @@ class StudyMergeTest {
         assertTrue(merged.any { it.id=="local" })
         assertFalse(merged.none { it.id=="remote" })
     }
+    @Test fun completedStateSurvivesOtherDeviceWithUnfinishedCopy() {
+        val base = group(card("a"))
+        val finished = group(card("a").copy(attempts = 1, correct = 1, completed = true))
+        val merged = StudyMerge.merge(listOf(base), listOf(base), listOf(finished))
+        assertTrue(merged.single().cards.single().completed)
+    }
+
+    @Test fun completedStateIsNeverLostWhenLocalAndRemoteProgressDiffer() {
+        val base = group(card("a"))
+        val finished = group(card("a").copy(attempts = 1, completed = true))
+        val otherDevice = group(card("a").copy(attempts = 1, correct = 1, completed = false))
+        val merged = StudyMerge.merge(listOf(base), listOf(finished), listOf(otherDevice))
+        assertTrue(merged.single().cards.single().completed)
+        assertEquals(2, merged.single().cards.single().attempts)
+    }
+
+    @Test fun firstSyncWithSameCardIdKeepsCompletedFlag() {
+        val unfinished = group(card("a"))
+        val finished = group(card("a").copy(completed = true))
+        val merged = StudyMerge.merge(null, listOf(unfinished), listOf(finished))
+        assertTrue(merged.single().cards.single().completed)
+    }
+
 }

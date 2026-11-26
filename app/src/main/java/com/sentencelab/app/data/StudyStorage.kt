@@ -34,7 +34,8 @@ class StudyStorage(context: Context, fileName: String = "sets.json") {
                             chunks = (0 until segments.length()).map(segments::getString),
                             attempts = card.optInt("attempts"),
                             correct = card.optInt("correct"),
-                            needsReview = card.optBoolean("needsReview")
+                            needsReview = card.optBoolean("needsReview"),
+                            completed = card.optBoolean("completed", card.optInt("attempts") > 0)
                         )
                     }
                 )
@@ -58,6 +59,7 @@ class StudyStorage(context: Context, fileName: String = "sets.json") {
                         .put("attempts", card.attempts)
                         .put("correct", card.correct)
                         .put("needsReview", card.needsReview)
+                        .put("completed", card.completed)
                 )
             }
             array.put(JSONObject().put("id", set.id).put("title", set.title).put("cards", cards))

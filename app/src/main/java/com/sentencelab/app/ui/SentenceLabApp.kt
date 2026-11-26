@@ -67,6 +67,7 @@ import com.sentencelab.app.model.StudySet
 import com.sentencelab.app.model.normalized
 import com.sentencelab.app.model.parseBulk
 import com.sentencelab.app.model.parseChunks
+import com.sentencelab.app.model.eligibleForStudy
 import com.sentencelab.app.model.validChunks
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -100,6 +101,7 @@ fun SentenceLabApp() {
     var importing by remember { mutableStateOf(false) }
     var deletingCard by remember { mutableStateOf<Sentence?>(null) }
     var deletingSet by remember { mutableStateOf(false) }
+    var directStudyCardId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     var fileImportTargetId by remember { mutableStateOf<String?>(null) }
     var fileImportBusy by remember { mutableStateOf(false) }
@@ -214,7 +216,8 @@ fun SentenceLabApp() {
                                 else card.copy(
                                     attempts = card.attempts + 1,
                                     correct = card.correct + if (isCorrect) 1 else 0,
-                                    needsReview = !isCorrect
+                                    needsReview = !isCorrect,
+                                    completed = true
                                 )
                             })
                         })
@@ -237,17 +240,45 @@ fun SentenceLabApp() {
                     },
                     onDeleteCard = { deletingCard = it },
                     onDeleteSet = { deletingSet = true },
+                    onDirectStudy = { card -> directStudyCardId = card.id },
                     onStudy = { mode, reviewOnly ->
-                        sessionIds = selected.cards.filter {
-                            (!reviewOnly || it.needsReview) &&
-                                (mode != StudyMode.SPELL || it.korean.isNotBlank())
-                        }
+                        sessionIds = eligibleForStudy(selected.cards, mode, reviewOnly)
                             .map { it.id }
                         studyMode = mode
                     }
                 )
             }
         }
+    }
+
+    val directCard = selected?.cards?.firstOrNull { it.id == directStudyCardId }
+    if (directCard != null) {
+        AlertDialog(
+            onDismissRequest = { directStudyCardId = null },
+            title = { Text("학습 유형 선택") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(directCard.english, maxLines = 3)
+                    if (directCard.completed) {
+                        Text("✓ 이미 완료한 문장도 다시 학습할 수 있습니다.")
+                    }
+                    StudyMode.entries.forEach { mode ->
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = mode != StudyMode.SPELL || directCard.korean.isNotBlank(),
+                            onClick = {
+                                sessionIds = listOf(directCard.id)
+                                studyMode = mode
+                                directStudyCardId = null
+                            }
+                        ) { Text(mode.label) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { directStudyCardId = null }) { Text("취소") }
+            }
+        )
     }
 
     if (fileImportBusy) {
@@ -450,7 +481,8 @@ private fun HomeScreen(
                         Text(set.title, style = MaterialTheme.typography.titleLarge)
                         Text(
                             set.cards.size.toString() + "문장 · 오답 " +
-                                set.cards.count { it.needsReview }.toString() + "개",
+                                set.cards.count { it.needsReview }.toString() + "개 · 완료 " +
+                                set.cards.count { it.completed }.toString() + "개",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -470,6 +502,7 @@ private fun SetScreen(
     onImportFile: () -> Unit,
     onDeleteCard: (Sentence) -> Unit,
     onDeleteSet: () -> Unit,
+    onDirectStudy: (Sentence) -> Unit,
     onStudy: (StudyMode, Boolean) -> Unit
 ) {
     Column(
@@ -481,15 +514,17 @@ private fun SetScreen(
             OutlinedButton(onClick = onImport) { Text("대량 등록") }
             OutlinedButton(onClick = onImportFile) { Text("Drive / PDF 가져오기") }
         }
-        Text("학습 모드", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text("학습 모드 · 미완료 " + set.cards.count { !it.completed } + "개",
+            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             StudyMode.entries.forEach { mode ->
                 FilledTonalButton(
-                    enabled = set.cards.isNotEmpty() &&
-                        (mode != StudyMode.SPELL || set.cards.any { it.korean.isNotBlank() }),
+                    enabled = set.cards.any {
+                        !it.completed && (mode != StudyMode.SPELL || it.korean.isNotBlank())
+                    },
                     onClick = { onStudy(mode, false) }
                 ) { Text(mode.label) }
             }
@@ -517,10 +552,14 @@ private fun SetScreen(
                         Text(card.english, style = MaterialTheme.typography.bodyLarge)
                         Spacer(Modifier.height(4.dp))
                         Text(card.korean, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (card.completed) {
+                            Text("✓ 학습 완료", color = MaterialTheme.colorScheme.primary)
+                        }
                         if (card.needsReview) {
                             Text("복습 필요", color = MaterialTheme.colorScheme.error)
                         }
                         Row {
+                            TextButton(onClick = { onDirectStudy(card) }) { Text("학습") }
                             TextButton(onClick = { onEdit(card) }) { Text("수정") }
                             TextButton(onClick = { onDeleteCard(card) }) { Text("삭제") }
                         }

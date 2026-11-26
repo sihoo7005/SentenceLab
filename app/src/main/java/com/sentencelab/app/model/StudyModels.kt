@@ -10,7 +10,8 @@ data class Sentence(
     val chunks: List<String> = english.trim().split(Regex("\\s+")),
     val attempts: Int = 0,
     val correct: Int = 0,
-    val needsReview: Boolean = false
+    val needsReview: Boolean = false,
+    val completed: Boolean = false
 )
 
 data class StudySet(
@@ -60,3 +61,11 @@ fun orderWordGroups(english: String): List<List<String>> {
 /** Duplicate words are valid choices for the next position, regardless of their source index. */
 fun matchesNextWord(expected: String, choice: String): Boolean =
     normalized(expected) == normalized(choice)
+
+
+/** Regular study skips completed cards; explicit review can still revisit mistakes. */
+fun eligibleForStudy(cards: List<Sentence>, mode: StudyMode, reviewOnly: Boolean): List<Sentence> =
+    cards.filter { card ->
+        (if (reviewOnly) card.needsReview else !card.completed) &&
+            (mode != StudyMode.SPELL || card.korean.isNotBlank())
+    }

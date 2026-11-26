@@ -52,4 +52,34 @@ class StudyModelsTest {
         assertTrue(matchesNextWord("the", "the"))
         assertFalse(matchesNextWord("world", "word"))
     }
+    @Test fun completedCardsDisappearFromAllNormalModes() {
+        val finished = Sentence(id = "done", english = "Done.", korean = "끝", completed = true)
+        val fresh = Sentence(id = "new", english = "New.", korean = "새로운", completed = false)
+        for (mode in StudyMode.entries) {
+            val list = eligibleForStudy(listOf(finished, fresh), mode, reviewOnly = false)
+            assertEquals(listOf("new"), list.map { it.id })
+        }
+    }
+
+    @Test fun explicitlyRequestedReviewCanIncludeCompletedMistakes() {
+        val mistake = Sentence(
+            id = "mistake", english = "Hello.", korean = "안녕",
+            completed = true, needsReview = true
+        )
+        assertEquals(
+            listOf("mistake"),
+            eligibleForStudy(listOf(mistake), StudyMode.ORDER, reviewOnly = true).map { it.id }
+        )
+        assertTrue(eligibleForStudy(listOf(mistake), StudyMode.ORDER, reviewOnly = false).isEmpty())
+    }
+
+    @Test fun normalSpellModeSkipsCardsWithoutKoreanTranslation() {
+        val missing = Sentence(id = "no-meaning", english = "Hello.", korean = "")
+        val meaningful = Sentence(id = "meaning", english = "World.", korean = "세상")
+        assertEquals(
+            listOf("meaning"),
+            eligibleForStudy(listOf(missing, meaningful), StudyMode.SPELL, false).map { it.id }
+        )
+    }
+
 }
