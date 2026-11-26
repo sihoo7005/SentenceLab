@@ -72,11 +72,23 @@ def test_email_invitation_requires_verified_google_login(monkeypatch):
 
             not_verified = login("sub-a", "private@example.com", False)
             assert client.get("/v1/library", headers=not_verified).json() == {"sets": []}
+            with backend.db() as conn:
+                assert conn.execute(
+                    "SELECT email FROM users WHERE google_sub=?", ("sub-a",)
+                ).fetchone()["email"] is None
 
             other = login("sub-b", "another@example.com", True)
             assert client.get("/v1/library", headers=other).json() == {"sets": []}
+            with backend.db() as conn:
+                assert conn.execute(
+                    "SELECT email FROM users WHERE google_sub=?", ("sub-b",)
+                ).fetchone()["email"] == "another@example.com"
 
             authorized = login("sub-a", "private@example.com", True)
+            with backend.db() as conn:
+                assert conn.execute(
+                    "SELECT email FROM users WHERE google_sub=?", ("sub-a",)
+                ).fetchone()["email"] == "private@example.com"
             visible = client.get("/v1/library", headers=authorized).json()["sets"]
             assert {item["id"] for item in visible} == {
                 "ybm-english-ii-lesson-2", "ybm-english-ii-lesson-4"
@@ -85,3 +97,30 @@ def test_email_invitation_requires_verified_google_login(monkeypatch):
                 assert conn.execute("SELECT COUNT(*) FROM curated_invites").fetchone()[0] == 0
                 assert conn.execute("SELECT COUNT(*) FROM curated_grants").fetchone()[0] == 2
             assert client.get("/v1/library", headers=other).json() == {"sets": []}
+
+
+def test_existing_database_migrates_email_without_erasing_user():
+    import sqlite3
+
+    with TemporaryDirectory() as temp:
+        backend.DB_PATH = Path(temp) / "existing.sqlite3"
+        connection = sqlite3.connect(backend.DB_PATH)
+        connection.execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, google_sub TEXT NOT NULL UNIQUE, "
+            "revision INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO users(id,google_sub,revision,created_at) VALUES (5,'sub-keep',7,123)"
+        )
+        connection.commit()
+        connection.close()
+
+        backend.init_db()
+        with backend.db() as conn:
+            stored = conn.execute(
+                "SELECT id,google_sub,email,revision,created_at FROM users WHERE id=5"
+            ).fetchone()
+            assert dict(stored) == {
+                "id": 5, "google_sub": "sub-keep", "email": None,
+                "revision": 7, "created_at": 123,
+            }
