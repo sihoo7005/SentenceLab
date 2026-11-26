@@ -87,7 +87,38 @@ def init_db():
                     position INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sentences_set_order ON sentences(set_id,position);
+                CREATE TABLE IF NOT EXISTS curated_sets (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    source_url TEXT NOT NULL DEFAULT '',
+                    position INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS curated_sentences (
+                    id TEXT PRIMARY KEY,
+                    set_id TEXT NOT NULL REFERENCES curated_sets(id) ON DELETE CASCADE,
+                    english TEXT NOT NULL,
+                    korean TEXT NOT NULL,
+                    chunks_json TEXT NOT NULL,
+                    position INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS curated_sentences_order ON curated_sentences(set_id,position);
+                CREATE TABLE IF NOT EXISTS curated_grants (
+                    set_id TEXT NOT NULL REFERENCES curated_sets(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    PRIMARY KEY (set_id,user_id)
+                );
+                CREATE INDEX IF NOT EXISTS curated_grants_by_user ON curated_grants(user_id);
             """)
+            # Metadata only. No copyrighted textbook text is populated here.
+            for set_id, title, order in [
+                ("ybm-english-ii-lesson-2", "YBM 영어II 2과", 0),
+                ("ybm-english-ii-lesson-4", "YBM 영어II 4과", 1),
+            ]:
+                conn.execute(
+                    "INSERT INTO curated_sets(id,title,source_url,position) VALUES (?,?,?,?) "
+                    "ON CONFLICT(id) DO NOTHING",
+                    (set_id, title, "", order),
+                )
     finally:
         os.umask(old_umask)
 
@@ -255,6 +286,37 @@ def get_snapshot(user_id: int = Depends(session_user)):
             } for s in sentence_rows]
             result.append({"id": group["id"], "title": group["title"], "cards": cards})
     return {"revision": revision, "sets": result}
+
+
+@app.get("/v1/library")
+def get_curated_library(user_id: int = Depends(session_user)):
+    """Return only sets explicitly granted to the logged-in Google account."""
+    with db() as conn:
+        groups = conn.execute(
+            "SELECT s.id,s.title FROM curated_sets AS s "
+            "JOIN curated_grants AS g ON g.set_id=s.id "
+            "WHERE g.user_id=? ORDER BY s.position,s.id",
+            (user_id,),
+        ).fetchall()
+        result = []
+        for group in groups:
+            cards = conn.execute(
+                "SELECT id,english,korean,chunks_json FROM curated_sentences "
+                "WHERE set_id=? ORDER BY position,id",
+                (group["id"],),
+            ).fetchall()
+            result.append({
+                "id": group["id"],
+                "title": group["title"],
+                "cards": [{
+                    "id": card["id"],
+                    "english": card["english"],
+                    "korean": card["korean"],
+                    "chunks": json.loads(card["chunks_json"]),
+                    "attempts": 0, "correct": 0, "needsReview": False,
+                } for card in cards],
+            })
+    return {"sets": result}
 
 
 @app.put("/v1/snapshot")
