@@ -4,7 +4,21 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val signingKeyStore = System.getenv("SENTENCELAB_SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }
+val signingPassword = System.getenv("SENTENCELAB_SIGNING_STORE_PASSWORD")?.takeIf { it.isNotBlank() }
+
 android {
+    signingConfigs {
+        if (signingKeyStore != null && signingPassword != null) {
+            create("stable") {
+                storeFile = file(signingKeyStore)
+                storeType = "pkcs12"
+                storePassword = signingPassword
+                keyAlias = "sentencelab"
+                keyPassword = signingPassword
+            }
+        }
+    }
     namespace = "com.sentencelab.app"
     compileSdk = 36
 
@@ -21,6 +35,11 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            if (signingConfigs.findByName("stable") != null) {
+                signingConfig = signingConfigs.getByName("stable")
+            }
+        }
         release {
             isMinifyEnabled = false
         }

@@ -45,3 +45,22 @@ v0.2.0의 클라우드 기능은 실시간 자동 동기화가 아닌 **수동 �
 서버 구성, 저장 구조 및 실행 요구사항: server/README.md
 
 현재 Oracle 인스턴스에는 서버를 배포하지 않았으며 데이터베이스도 아직 생성하지 않았습니다.
+
+## Android 앱 고정 서명 (Google 인증용)
+
+고정된 Android 서명 키를 Oracle의 전용 디렉터리에 한 번 생성했습니다.
+개인 키 파일과 비밀번호는 저장소에 올리지 않습니다.
+
+- keystore: `/home/opc/sentencelab-signing/sentencelab-signing.p12`
+- password: `/home/opc/sentencelab-signing/sentencelab-signing.password`
+- key alias: `sentencelab`
+- Google Android SHA-1: `58:A3:D2:86:29:23:01:87:73:EB:12:54:0C:72:8A:8E:21:A1:76:84`
+
+GitHub Actions Secrets 설정에 다음 두 항목을 추가해야 고정 서명에 적용됩니다.
+
+- `SENTENCELAB_KEYSTORE_BASE64`: p12 파일을 Base64 인코딩한 문자열
+- `SENTENCELAB_KEYSTORE_PASSWORD`: password 파일의 한 줄 비밀번호
+
+기기에서 SSH 접속할 수 있다면 비밀값을 채팅에 붙여넣지 않고 GitHub CLI로 직접 설정할 수 있습니다.
+설정 전에는 GitHub Actions에서 일반 임시 디버그 키로 서명합니다.
+향후 APK 업데이트에 필요한 개인 키이므로 외부 노출을 피하고 안전하게 백업하세요.

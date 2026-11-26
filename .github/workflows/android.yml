@@ -44,11 +44,35 @@ jobs:
       - name: Install Android API 36
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
 
+      - name: Configure stable app signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SENTENCELAB_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SENTENCELAB_KEYSTORE_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" && -z "$KEYSTORE_PASSWORD" ]]; then
+            echo "Stable signing secrets are absent. Using a temporary debug signature."
+            exit 0
+          fi
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASSWORD" ]]; then
+            echo "::error::Both stable signing secrets must be configured together."
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/sentencelab-signing.p12"
+          echo "SENTENCELAB_SIGNING_STORE_FILE=$RUNNER_TEMP/sentencelab-signing.p12" >> "$GITHUB_ENV"
+          echo "SENTENCELAB_SIGNING_STORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "Stable APK signing enabled."
+
       - name: Run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
+
+      - name: Check APK signing certificate
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
