@@ -8,11 +8,11 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * All data stays in app-private storage; no Internet permission is requested.
+ * Local data stays in app-private storage until explicitly synchronized by the cloud client.
  * A temporary file is written first to avoid truncating the previous save.
  */
-class StudyStorage(context: Context) {
-    private val file = File(context.filesDir, "sets.json")
+class StudyStorage(context: Context, fileName: String = "sets.json") {
+    private val file = File(context.filesDir, fileName)
 
     fun load(): List<StudySet> {
         if (!file.exists()) return emptyList()
@@ -62,7 +62,7 @@ class StudyStorage(context: Context) {
             }
             array.put(JSONObject().put("id", set.id).put("title", set.title).put("cards", cards))
         }
-        val temp = File(file.parentFile, "sets.json.tmp")
+        val temp = File(file.parentFile, file.name + ".tmp")
         temp.writeText(array.toString(), Charsets.UTF_8)
         if (!temp.renameTo(file)) {
             file.writeText(array.toString(), Charsets.UTF_8)

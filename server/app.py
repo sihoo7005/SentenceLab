@@ -290,6 +290,12 @@ def logout(
     return {"ok": True}
 
 
+@app.get("/v1/me")
+def account_identity(user_id: int = Depends(session_user)):
+    # Stable per-account identifier for client-side sync lineage.
+    return {"account_id": str(user_id)}
+
+
 @app.get("/v1/snapshot")
 def get_snapshot(user_id: int = Depends(session_user)):
     with db() as conn:

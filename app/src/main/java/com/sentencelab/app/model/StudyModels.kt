@@ -49,3 +49,14 @@ fun parseChunks(english: String, raw: String): List<String> =
 
 fun validChunks(english: String, parts: List<String>): Boolean =
     parts.isNotEmpty() && normalized(english) == normalized(parts.joinToString(" "))
+
+
+/** Split long sentences into consecutive eight-word chunks, keeping the final remainder. */
+fun orderWordGroups(english: String): List<List<String>> {
+    val words = english.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+    return words.chunked(8)
+}
+
+/** Duplicate words are valid choices for the next position, regardless of their source index. */
+fun matchesNextWord(expected: String, choice: String): Boolean =
+    normalized(expected) == normalized(choice)

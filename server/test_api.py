@@ -27,6 +27,8 @@ def test_snapshot_isolated_by_account():
             assert client.put("/v1/snapshot", headers=headers, json=payload).status_code == 200
             assert client.put("/v1/snapshot", headers=headers, json=payload).status_code == 409
             assert len(client.get("/v1/snapshot", headers=headers).json()["sets"]) == 1
+            assert client.get("/v1/me", headers=headers).json() == {"account_id": "1"}
+            assert client.get("/v1/me").status_code == 401
             assert client.get("/v1/snapshot", headers=headers).json()["sets"][0]["cards"][0]["korean"] == ""
             assert client.get("/v1/snapshot", headers={"Authorization": "Bearer " + token_b}).json()["sets"] == []
             assert client.get("/v1/snapshot").status_code == 401

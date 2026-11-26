@@ -21,6 +21,8 @@ import javax.crypto.spec.GCMParameterSpec
 
 data class CloudSnapshot(val revision: Int, val sets: List<StudySet>)
 
+class CloudConflictException : IllegalStateException("서버 데이터가 변경되어 다시 동기화합니다.")
+
 /** Google ID tokens are exchanged for our own random bearer session token. */
 class CloudApi {
     private val base: String = BuildConfig.API_BASE_URL.trimEnd('/')
@@ -50,10 +52,10 @@ class CloudApi {
                 connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             }
             val status = connection.responseCode
+            if (status == 409) throw CloudConflictException()
             if (status !in 200..299) {
                 val description = when (status) {
                     401 -> "인증이 만료되었거나 로그인에 실패했습니다."
-                    409 -> "서버 데이터가 다른 기기에서 변경되었습니다. 먼저 복원하세요."
                     503 -> "서버 로그인 설정이 아직 완료되지 않았습니다."
                     else -> "서버 요청 오류 (HTTP $status)"
                 }
@@ -76,6 +78,9 @@ class CloudApi {
     suspend fun logout(token: String) {
         request("POST", "/v1/auth/logout", JSONObject(), token)
     }
+
+    suspend fun accountId(token: String): String =
+        request("GET", "/v1/me", token = token).getString("account_id")
 
     suspend fun getSnapshot(token: String): CloudSnapshot {
         val data = request("GET", "/v1/snapshot", token = token)

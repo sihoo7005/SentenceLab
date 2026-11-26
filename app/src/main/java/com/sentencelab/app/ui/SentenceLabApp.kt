@@ -2,6 +2,9 @@ package com.sentencelab.app.ui
 
 import android.app.Activity
 import android.content.Intent
+import androidx.activity.ComponentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -54,6 +57,9 @@ import androidx.compose.ui.unit.dp
 import com.sentencelab.app.data.DocumentImporter
 import com.sentencelab.app.data.ImportedDocument
 import com.sentencelab.app.data.StudyStorage
+import com.sentencelab.app.cloud.CloudSession
+import com.sentencelab.app.cloud.StudySync
+import com.sentencelab.app.cloud.StudyMerge
 import com.sentencelab.app.model.BulkEntry
 import com.sentencelab.app.model.Sentence
 import com.sentencelab.app.model.StudyMode
@@ -64,13 +70,27 @@ import com.sentencelab.app.model.parseChunks
 import com.sentencelab.app.model.validChunks
 import java.util.Locale
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.channels.BufferOverflow
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
 fun SentenceLabApp() {
     val context = LocalContext.current
     val storage = remember { StudyStorage(context.applicationContext) }
     var sets by remember { mutableStateOf(storage.load()) }
+    val cloudSession = remember { CloudSession(context.applicationContext) }
+    val syncEngine = remember { StudySync(context.applicationContext) }
+    var sessionToken by remember { mutableStateOf(cloudSession.load()) }
+    var syncStatus by remember { mutableStateOf("동기화 준비 중") }
+    val syncSignals = remember {
+        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    }
     var currentSetId by remember { mutableStateOf<String?>(null) }
     var studyMode by remember { mutableStateOf<StudyMode?>(null) }
     var sessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -106,6 +126,43 @@ fun SentenceLabApp() {
     fun save(updated: List<StudySet>) {
         storage.save(updated)
         sets = updated
+        syncSignals.tryEmit(Unit)
+    }
+
+    LaunchedEffect(sessionToken) {
+        val token = sessionToken ?: return@LaunchedEffect
+        syncSignals.onStart { emit(Unit) }.debounce(650L).collect {
+            val localStart = sets
+            syncStatus = "자동 동기화 중…"
+            try {
+                val result = syncEngine.reconcile(token, localStart)
+                val latest = sets
+                val combined = if (latest == localStart) result.sets
+                    else StudyMerge.merge(localStart, latest, result.sets)
+                if (combined != latest) save(combined)
+                syncStatus = "자동 동기화 완료 · 서버 버전 " + result.revision
+            } catch (e: Exception) {
+                syncStatus = "동기화 보류 · " +
+                    (e.localizedMessage ?: "네트워크를 확인하세요.") +
+                    " · 기기 데이터는 유지됩니다."
+            }
+        }
+    }
+
+    LaunchedEffect(sessionToken) {
+        while (sessionToken != null) {
+            delay(60_000L)
+            syncSignals.tryEmit(Unit)
+        }
+    }
+
+    val activity = context as? ComponentActivity
+    DisposableEffect(activity) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) syncSignals.tryEmit(Unit)
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose { activity?.lifecycle?.removeObserver(observer) }
     }
 
     val selected = sets.firstOrNull { it.id == currentSetId }
@@ -136,7 +193,14 @@ fun SentenceLabApp() {
                     sets = sets,
                     onCreate = { newSetOpen = true },
                     onOpen = { currentSetId = it },
-                    onRestore = { save(it) }
+                    sessionToken = sessionToken,
+                    syncStatus = syncStatus,
+                    onSyncNow = { syncSignals.tryEmit(Unit) },
+                    onSessionChanged = { token ->
+                        sessionToken = token
+                        syncStatus = if (token == null) "로그인하면 자동 동기화됩니다."
+                            else "자동 동기화 준비 중"
+                    }
                 )
                 studyMode != null -> StudyScreen(
                     set = selected,
@@ -233,7 +297,7 @@ fun SentenceLabApp() {
                             })
                         }
                         fileImportMessage = added.size.toString() +
-                            "개 문장을 내 세트에 추가했습니다. 클라우드 백업은 별도로 실행하세요."
+                            "개 문장을 내 세트에 추가했습니다. 로그인 상태면 자동 동기화됩니다."
                     }
                     fileImportPreview = null
                 }) { Text("가져오기") }
@@ -354,13 +418,21 @@ private fun HomeScreen(
     sets: List<StudySet>,
     onCreate: () -> Unit,
     onOpen: (String) -> Unit,
-    onRestore: (List<StudySet>) -> Unit
+    sessionToken: String?,
+    syncStatus: String,
+    onSyncNow: () -> Unit,
+    onSessionChanged: (String?) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        CloudAccountPanel(sets = sets, onRestore = onRestore)
+        CloudAccountPanel(
+            sessionToken = sessionToken,
+            syncStatus = syncStatus,
+            onSyncNow = onSyncNow,
+            onSessionChanged = onSessionChanged
+        )
         Text("내 문장 세트", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("네트워크 연결 없이 모든 학습 내용을 기기에 저장합니다.")
         Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) { Text("+ 새 세트") }
@@ -687,30 +759,49 @@ private fun OrderQuestion(
     onGrade: (Boolean) -> Unit,
     onNext: () -> Unit
 ) {
-    val parts = remember(card.id) {
-        card.chunks.ifEmpty { card.english.trim().split(Regex("\\s+")) }
+    val groups = remember(card.id) { com.sentencelab.app.model.orderWordGroups(card.english) }
+    var groupIndex by remember(card.id) { mutableIntStateOf(0) }
+    var selected by remember(card.id, groupIndex) { mutableStateOf<List<Int>>(emptyList()) }
+    var hadMistake by remember(card.id) { mutableStateOf(false) }
+    var lastTapWrong by remember(card.id, groupIndex) { mutableStateOf(false) }
+    var complete by remember(card.id) { mutableStateOf(false) }
+
+    if (complete) {
+        CheckResult(!hadMistake, card.english, onNext)
+        return
     }
-    val choices = remember(card.id) {
-        val original = parts.indices.toList()
-        val shuffled = original.shuffled()
-        if (shuffled == original && shuffled.size > 1) shuffled.drop(1) + shuffled.first()
+    if (groups.isEmpty()) {
+        Text("이 문장은 배열할 단어가 없습니다.")
+        Button(onClick = onNext) { Text("다음 문장") }
+        return
+    }
+
+    val words = groups[groupIndex]
+    val choices = remember(card.id, groupIndex) {
+        val indices = words.indices.toList()
+        val shuffled = indices.shuffled()
+        if (shuffled == indices && shuffled.size > 1) shuffled.drop(1) + shuffled.first()
         else shuffled
     }
-    var selected by remember(card.id) { mutableStateOf<List<Int>>(emptyList()) }
-    var result by remember(card.id) { mutableStateOf<Boolean?>(null) }
-    Text("아래 조각을 순서대로 누르세요.")
+
+    Text("단어를 누르면 바로 정답을 확인합니다.")
+    if (groups.size > 1) {
+        Text("문장 구간 " + (groupIndex + 1) + " / " + groups.size)
+        if (groupIndex > 0) {
+            Text("완료: " + groups.take(groupIndex).flatten().joinToString(" "))
+        }
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
-            if (selected.isEmpty()) Text("여기에 문장을 완성하세요.")
+            if (selected.isEmpty()) Text("올바른 순서로 단어를 선택하세요.")
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 selected.forEach { index ->
-                    OutlinedButton(
-                        onClick = { if (result == null) selected = selected - index },
-                        enabled = result == null
-                    ) { Text(parts[index]) }
+                    OutlinedButton(onClick = {}, enabled = false) {
+                        Text(words[index])
+                    }
                 }
             }
         }
@@ -720,24 +811,33 @@ private fun OrderQuestion(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         choices.filterNot { it in selected }.forEach { index ->
-            FilledTonalButton(
-                onClick = { selected = selected + index },
-                enabled = result == null
-            ) { Text(parts[index]) }
+            FilledTonalButton(onClick = {
+                val expected = words[selected.size]
+                if (!com.sentencelab.app.model.matchesNextWord(expected, words[index])) {
+                    hadMistake = true
+                    lastTapWrong = true
+                } else {
+                    lastTapWrong = false
+                    val next = selected + index
+                    if (next.size == words.size) {
+                        if (groupIndex == groups.lastIndex) {
+                            complete = true
+                            onGrade(!hadMistake)
+                        } else {
+                            groupIndex += 1
+                        }
+                    } else {
+                        selected = next
+                    }
+                }
+            }) { Text(words[index]) }
         }
     }
-    if (result == null) {
-        Button(
-            enabled = selected.size == parts.size,
-            onClick = {
-                val answer = selected.joinToString(" ") { parts[it] }
-                val correct = normalized(answer) == normalized(card.english)
-                onGrade(correct)
-                result = correct
-            }
-        ) { Text("정답 확인") }
-    } else {
-        CheckResult(result == true, card.english, onNext)
+    if (lastTapWrong) {
+        Text(
+            "순서가 다른 단어입니다. 다시 선택하세요.",
+            color = MaterialTheme.colorScheme.error
+        )
     }
 }
 

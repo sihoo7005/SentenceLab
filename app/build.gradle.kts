@@ -26,8 +26,8 @@ android {
         applicationId = "com.sentencelab.app"
         minSdk = 26
         targetSdk = 35
-        versionName = "0.3.0"
-        versionCode = 3
+        versionName = "0.4.0"
+        versionCode = 4
         val webClientId = providers.gradleProperty("GOOGLE_WEB_CLIENT_ID").orElse("").get()
         val apiBaseUrl = providers.gradleProperty("API_BASE_URL").orElse("").get()
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
