@@ -160,7 +160,7 @@ def google_login(body: GoogleLogin):
         payload = google_id_token.verify_oauth2_token(
             body.id_token, google_requests.Request(), CLIENT_ID
         )
-    except (ValueError, Exception) as exc:
+    except Exception as exc:
         # Do not include the token or Google exception text in a response.
         raise HTTPException(401, "Invalid Google ID token") from exc
 
@@ -176,11 +176,12 @@ def google_login(body: GoogleLogin):
         try:
             conn.execute("BEGIN IMMEDIATE")
             match = conn.execute(
-                "DELETE FROM login_challenges WHERE nonce_hash=? AND expires_at>=? RETURNING nonce_hash",
+                "SELECT nonce_hash FROM login_challenges WHERE nonce_hash=? AND expires_at>=?",
                 (digest(body.nonce), now),
             ).fetchone()
             if match is None:
                 raise HTTPException(401, "Expired or already used login challenge")
+            conn.execute("DELETE FROM login_challenges WHERE nonce_hash=?", (digest(body.nonce),))
             conn.execute(
                 "INSERT INTO users(google_sub,created_at) VALUES (?,?) "
                 "ON CONFLICT(google_sub) DO NOTHING",
