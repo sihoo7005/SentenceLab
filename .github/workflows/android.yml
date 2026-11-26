@@ -75,7 +75,7 @@ jobs:
             -keystore "$SENTENCELAB_SIGNING_STORE_FILE" \
             -storetype PKCS12 \
             -storepass:env KEYSTORE_PASSWORD \
-            -alias sentencelab > /dev/null
+            -alias sentencelab
           echo "Stable signing keystore password and alias verified."
 
       - name: Run unit tests
