@@ -40,3 +40,48 @@ def test_private_library_denies_unlisted_users():
 
             # Personal snapshots remain separate from shared sets.
             assert client.get("/v1/snapshot", headers=headers_a).json()["sets"] == []
+
+
+def test_email_invitation_requires_verified_google_login(monkeypatch):
+    with TemporaryDirectory() as temp:
+        backend.DB_PATH = Path(temp) / "test.sqlite3"
+        monkeypatch.setattr(backend, "CLIENT_ID", "test-web-client")
+        with TestClient(backend.app) as client:
+            with backend.db() as conn:
+                for set_id in ("ybm-english-ii-lesson-2", "ybm-english-ii-lesson-4"):
+                    conn.execute(
+                        "INSERT INTO curated_invites(set_id,email) VALUES (?,?)",
+                        (set_id, "private@example.com"),
+                    )
+
+            def login(sub, email, verified):
+                nonce = client.post("/v1/auth/challenge").json()["nonce"]
+                monkeypatch.setattr(
+                    backend.google_id_token,
+                    "verify_oauth2_token",
+                    lambda _token, _request, _client_id: {
+                        "sub": sub, "nonce": nonce, "email": email, "email_verified": verified
+                    },
+                )
+                response = client.post(
+                    "/v1/auth/google",
+                    json={"id_token": "dummy-token-for-test", "nonce": nonce},
+                )
+                assert response.status_code == 200
+                return {"Authorization": "Bearer " + response.json()["session_token"]}
+
+            not_verified = login("sub-a", "private@example.com", False)
+            assert client.get("/v1/library", headers=not_verified).json() == {"sets": []}
+
+            other = login("sub-b", "another@example.com", True)
+            assert client.get("/v1/library", headers=other).json() == {"sets": []}
+
+            authorized = login("sub-a", "private@example.com", True)
+            visible = client.get("/v1/library", headers=authorized).json()["sets"]
+            assert {item["id"] for item in visible} == {
+                "ybm-english-ii-lesson-2", "ybm-english-ii-lesson-4"
+            }
+            with backend.db() as conn:
+                assert conn.execute("SELECT COUNT(*) FROM curated_invites").fetchone()[0] == 0
+                assert conn.execute("SELECT COUNT(*) FROM curated_grants").fetchone()[0] == 2
+            assert client.get("/v1/library", headers=other).json() == {"sets": []}
