@@ -151,7 +151,7 @@ class GoogleLogin(BaseModel):
 class SentenceIn(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     english: str = Field(min_length=1, max_length=2000)
-    korean: str = Field(min_length=1, max_length=2000)
+    korean: str = Field(default="", max_length=2000)
     chunks: list[str] = Field(max_length=100)
     attempts: int = Field(ge=0, le=1_000_000)
     correct: int = Field(ge=0, le=1_000_000)

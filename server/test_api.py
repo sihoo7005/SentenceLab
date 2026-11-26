@@ -21,12 +21,13 @@ def test_snapshot_isolated_by_account():
                 db.execute("INSERT INTO sessions VALUES (?,?,?)", (backend.digest(token_b), 2, 9999999999))
             headers = {"Authorization": "Bearer " + token_a}
             payload = {"base_revision": 0, "sets": [{"id": "s1", "title": "Study", "cards": [
-                {"id": "c1", "english": "Hello!", "korean": "안녕", "chunks": ["Hello!"],
+                {"id": "c1", "english": "Hello!", "korean": "", "chunks": ["Hello!"],
                  "attempts": 0, "correct": 0, "needsReview": False}
             ]}]}
             assert client.put("/v1/snapshot", headers=headers, json=payload).status_code == 200
             assert client.put("/v1/snapshot", headers=headers, json=payload).status_code == 409
             assert len(client.get("/v1/snapshot", headers=headers).json()["sets"]) == 1
+            assert client.get("/v1/snapshot", headers=headers).json()["sets"][0]["cards"][0]["korean"] == ""
             assert client.get("/v1/snapshot", headers={"Authorization": "Bearer " + token_b}).json()["sets"] == []
             assert client.get("/v1/snapshot").status_code == 401
 

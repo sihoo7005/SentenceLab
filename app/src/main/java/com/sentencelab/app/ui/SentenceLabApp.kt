@@ -1,6 +1,10 @@
 package com.sentencelab.app.ui
 
+import android.app.Activity
+import android.content.Intent
 import android.speech.tts.TextToSpeech
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -41,11 +45,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.sentencelab.app.data.DocumentImporter
+import com.sentencelab.app.data.ImportedDocument
 import com.sentencelab.app.data.StudyStorage
 import com.sentencelab.app.model.BulkEntry
 import com.sentencelab.app.model.Sentence
@@ -56,6 +63,7 @@ import com.sentencelab.app.model.parseBulk
 import com.sentencelab.app.model.parseChunks
 import com.sentencelab.app.model.validChunks
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,6 +80,28 @@ fun SentenceLabApp() {
     var importing by remember { mutableStateOf(false) }
     var deletingCard by remember { mutableStateOf<Sentence?>(null) }
     var deletingSet by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var fileImportTargetId by remember { mutableStateOf<String?>(null) }
+    var fileImportBusy by remember { mutableStateOf(false) }
+    var fileImportPreview by remember { mutableStateOf<ImportedDocument?>(null) }
+    var fileImportMessage by remember { mutableStateOf<String?>(null) }
+    val documentPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = if (result.resultCode == Activity.RESULT_OK) result.data?.data else null
+        if (uri != null) {
+            scope.launch {
+                fileImportBusy = true
+                try {
+                    fileImportPreview = DocumentImporter.read(context.applicationContext, uri)
+                } catch (e: Exception) {
+                    fileImportMessage = e.localizedMessage ?: "문서를 읽지 못했습니다."
+                } finally {
+                    fileImportBusy = false
+                }
+            }
+        }
+    }
 
     fun save(updated: List<StudySet>) {
         storage.save(updated)
@@ -132,16 +162,97 @@ fun SentenceLabApp() {
                     onAdd = { editing = null; editorOpen = true },
                     onEdit = { editing = it; editorOpen = true },
                     onImport = { importing = true },
+                    onImportFile = {
+                        fileImportTargetId = selected.id
+                        fileImportMessage = null
+                        // Virtual Google Docs are excluded by CATEGORY_OPENABLE.
+                        documentPicker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            type = "*/*"
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        })
+                    },
                     onDeleteCard = { deletingCard = it },
                     onDeleteSet = { deletingSet = true },
                     onStudy = { mode, reviewOnly ->
-                        sessionIds = selected.cards.filter { !reviewOnly || it.needsReview }
+                        sessionIds = selected.cards.filter {
+                            (!reviewOnly || it.needsReview) &&
+                                (mode != StudyMode.SPELL || it.korean.isNotBlank())
+                        }
                             .map { it.id }
                         studyMode = mode
                     }
                 )
             }
         }
+    }
+
+    if (fileImportBusy) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("문서 가져오는 중") },
+            text = { Text("Google Drive 또는 PDF에서 텍스트를 추출하고 있습니다.") },
+            confirmButton = {}
+        )
+    }
+
+    val importedFile = fileImportPreview
+    if (importedFile != null) {
+        AlertDialog(
+            onDismissRequest = { fileImportPreview = null },
+            title = { Text("문장 가져오기 확인") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("파일: " + importedFile.name)
+                    Text("읽은 문장: " + importedFile.sentences.size + "개")
+                    Text("미리보기")
+                    Text(importedFile.sentences.take(2).joinToString("\n\n"), maxLines = 7)
+                    Text("영어 원문은 그대로 저장합니다. 한국어 해석은 나중에 문장 수정에서 입력할 수 있습니다.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val targetId = fileImportTargetId
+                    val target = sets.firstOrNull { it.id == targetId }
+                    if (target == null) {
+                        fileImportMessage = "가져올 문장 세트를 찾을 수 없습니다."
+                    } else {
+                        val seen = target.cards.map { normalized(it.english) }.toMutableSet()
+                        val added = importedFile.sentences.filter { seen.add(normalized(it)) }
+                            .map { english ->
+                                val words = english.split(Regex("\\s+"))
+                                val segmentSize = (words.size + 99) / 100
+                                Sentence(
+                                    english = english, korean = "",
+                                    chunks = words.chunked(segmentSize).map { it.joinToString(" ") }
+                                )
+                            }
+                        if (added.isNotEmpty()) {
+                            save(sets.map { group ->
+                                if (group.id == targetId) group.copy(cards = group.cards + added)
+                                else group
+                            })
+                        }
+                        fileImportMessage = added.size.toString() +
+                            "개 문장을 내 세트에 추가했습니다. 클라우드 백업은 별도로 실행하세요."
+                    }
+                    fileImportPreview = null
+                }) { Text("가져오기") }
+            },
+            dismissButton = {
+                TextButton(onClick = { fileImportPreview = null }) { Text("취소") }
+            }
+        )
+    }
+
+    if (fileImportMessage != null) {
+        AlertDialog(
+            onDismissRequest = { fileImportMessage = null },
+            title = { Text("파일 가져오기") },
+            text = { Text(fileImportMessage.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = { fileImportMessage = null }) { Text("확인") }
+            }
+        )
     }
 
     if (newSetOpen) {
@@ -284,6 +395,7 @@ private fun SetScreen(
     onAdd: () -> Unit,
     onEdit: (Sentence) -> Unit,
     onImport: () -> Unit,
+    onImportFile: () -> Unit,
     onDeleteCard: (Sentence) -> Unit,
     onDeleteSet: () -> Unit,
     onStudy: (StudyMode, Boolean) -> Unit
@@ -295,6 +407,7 @@ private fun SetScreen(
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onAdd) { Text("+ 문장 추가") }
             OutlinedButton(onClick = onImport) { Text("대량 등록") }
+            OutlinedButton(onClick = onImportFile) { Text("Drive / PDF 가져오기") }
         }
         Text("학습 모드", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         FlowRow(
@@ -303,7 +416,8 @@ private fun SetScreen(
         ) {
             StudyMode.entries.forEach { mode ->
                 FilledTonalButton(
-                    enabled = set.cards.isNotEmpty(),
+                    enabled = set.cards.isNotEmpty() &&
+                        (mode != StudyMode.SPELL || set.cards.any { it.korean.isNotBlank() }),
                     onClick = { onStudy(mode, false) }
                 ) { Text(mode.label) }
             }
@@ -357,7 +471,7 @@ private fun SentenceEditor(
         mutableStateOf(initial?.chunks?.joinToString(" | ").orEmpty())
     }
     val chunks = parseChunks(english, chunksInput)
-    val valid = english.isNotBlank() && korean.isNotBlank() && validChunks(english, chunks)
+    val valid = english.isNotBlank() && validChunks(english, chunks)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "문장 추가" else "문장 수정") },
@@ -374,7 +488,7 @@ private fun SentenceEditor(
                     value = korean,
                     onValueChange = { korean = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("한국어 뜻") },
+                    label = { Text("한국어 뜻 (선택)") },
                     minLines = 2
                 )
                 OutlinedTextField(
@@ -500,7 +614,10 @@ private fun StudyScreen(
                 progress = { (position + 1).toFloat() / cards.size },
                 modifier = Modifier.fillMaxWidth()
             )
-            Text(card.korean, style = MaterialTheme.typography.headlineSmall)
+            Text(
+                card.korean.ifBlank { "한국어 해석이 없는 원문입니다." },
+                style = MaterialTheme.typography.headlineSmall
+            )
             key(card.id) {
                 when (mode) {
                     StudyMode.FLASHCARD -> FlashcardQuestion(
