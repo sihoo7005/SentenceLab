@@ -1,58 +1,47 @@
 # SentenceLab
 
-영어 문장 학습을 위한 네이티브 Kotlin + Jetpack Compose 안드로이드 앱입니다.
-WebView, 서버, 로그인, 광고 및 유료 기능이 없습니다.
-클래스카드와 무관한 독립 구현입니다.
+네이티브 Kotlin + Jetpack Compose 기반 영어 문장 학습 안드로이드 앱입니다.
+WebView 없이 작동하며 기존 클래스카드 서비스와는 무관한 독립 프로젝트입니다.
 
-## v0.1.0 기능
+## v0.2.0
 
-- 세트 생성 및 삭제, 문장 등록·수정·삭제
-- 대량 등록: 한 줄에 영어 문장 + Tab + 한국어 뜻, 또는 영어 문장|||한국어 뜻
-- 암기: 한국어를 보고 원문 공개, 기억 여부 기록
-- 어순 배열: 단어 또는 직접 지정한 구 단위로 문장 재구성
-- 영작: 영어 문장 전체를 직접 입력
-- 빈칸: 영어 단어 하나를 찾아 입력
-- 오답 복습: 마지막 채점이 틀린 문장을 다시 학습
-- 영어 듣기: Android 내장 Text-to-Speech 엔진
-- 학습 데이터: 앱 전용 저장소의 JSON 파일, 오프라인 동작
+- 문장 세트 등록, 수정, 삭제 및 탭 구분 대량 가져오기
+- 암기, 단어/구 단위 어순 배열, 영작, 빈칸 채우기, 오답 복습
+- 음성 듣기, 오프라인 저장
+- Google 로그인 및 Oracle 클라우드 수동 백업/복원(설정 필요)
+- 서버 데이터 revision을 확인해 다른 기기 변경 시 충돌 감지
 
-## 개발 및 빌드
+Android 프로젝트 빌드: ./gradlew assembleDebug
+APK 경로: app/build/outputs/apk/debug/app-debug.apk
+GitHub Actions: .github/workflows/android.yml
 
-필요한 환경: JDK 17, Android SDK 36, Android Gradle Plugin 8.13.2,
-Gradle 8.13, Kotlin 2.2.20, Compose BOM 2026.09.00.
-최소 Android 8.0 (API 26).
+필요 환경: JDK 17, Gradle 8.13, Android Gradle Plugin 8.13.2,
+Kotlin 2.2.20, compileSdk 36, minSdk 26.
 
-Android Studio에서 저장소 루트 디렉터리를 프로젝트로 열어 Gradle 동기화를 진행합니다.
+## 구글 로그인 설정
 
-디버그 APK 빌드:
+Google Cloud에서 Web 유형 OAuth 클라이언트와 Android 유형 클라이언트를 같은 프로젝트에 생성하세요.
+Web 클라이언트 ID는 토큰 발급/서버 검증에 사용합니다.
+Android 클라이언트에는 패키지 com.sentencelab.app과 APK 서명 키의 SHA-1을 등록해야 합니다.
 
-    ./gradlew assembleDebug
+GitHub 저장소 Settings > Secrets and variables > Actions > Variables에 등록:
+- GOOGLE_WEB_CLIENT_ID: Web 유형 클라이언트 ID
+- API_BASE_URL: 서비스 API의 HTTPS 주소 (예: https://api.example.com)
 
-Windows에서는 다음 명령을 사용합니다.
+Oracle API 서버에도 같은 GOOGLE_WEB_CLIENT_ID 환경 변수가 필요합니다.
+값을 설정한 뒤 APK를 새로 빌드해야 합니다.
 
-    gradlew.bat assembleDebug
+**중요:** GitHub-hosted runner가 매번 임시 디버그 인증서로 서명하면
+실제로 APK가 생성되더라도 Google 로그인이 실패할 수 있습니다.
+고정된 서명 키를 별도로 안전하게 관리해야 합니다. 비밀 키를 GitHub 코드에 올리지 마세요.
 
-**Gradle 부트스트랩:** 바이너리 Wrapper JAR은 저장소에 포함하지 않았습니다.
-첫 명령 실행 시 공식 Gradle 서버에서 버전 8.13의 Wrapper JAR을 내려받아
-공식 SHA-256 체크섬을 확인한 뒤 실행합니다. 첫 실행에는 인터넷이 필요합니다.
-Gradle 배포본의 SHA-256도 확인합니다.
+## 클라우드 데이터
 
-생성 파일의 기본 위치: app/build/outputs/apk/debug/app-debug.apk
+로그인 없이도 로컬 학습을 계속 사용할 수 있습니다.
+v0.2.0의 클라우드 기능은 실시간 자동 동기화가 아닌 **수동 백업/복원**입니다.
+복원 시 현재 기기 데이터를 서버 데이터로 교체하기 전에 확인을 받으며,
+서버 revision 충돌 시 자동으로 덮어쓰지 않습니다.
 
-## 문장 조각 설정 예시
+서버 구성, 저장 구조 및 실행 요구사항: server/README.md
 
-영어: The earlier this assessment occurs, the more quickly resources can be channelled.
-
-어순 조각: The earlier | this assessment occurs, | the more quickly | resources can be channelled.
-
-조각을 합쳤을 때 영어 원문과 같아야 저장됩니다.
-
-## 데이터와 검증 상태
-
-문장과 학습 기록은 앱 전용 저장소에 보관되며 인터넷 권한이 없습니다.
-안드로이드 자동 백업도 껐습니다. 앱을 삭제하면 학습 기록이 삭제됩니다.
-클라우드 동기화, 데이터 파일 내보내기, 가져오기는 아직 제공하지 않습니다.
-
-단위 테스트: ./gradlew testDebugUnitTest
-
-**APK 빌드 및 실기기 실행 검증은 아직 완료하지 않았습니다.**
+현재 Oracle 인스턴스에는 서버를 배포하지 않았으며 데이터베이스도 아직 생성하지 않았습니다.

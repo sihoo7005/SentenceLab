@@ -9,3 +9,11 @@ local.properties
 captures/
 .DS_Store
 gradle/wrapper/gradle-wrapper.jar
+
+.env
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.venv/
+__pycache__/
+.pytest_cache/

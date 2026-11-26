@@ -12,7 +12,7 @@ android {
         applicationId = "com.sentencelab.app"
         minSdk = 26
         targetSdk = 35
-         versionName = "0.2.0"
+        versionName = "0.2.0"
         versionCode = 2
         val webClientId = providers.gradleProperty("GOOGLE_WEB_CLIENT_ID").orElse("").get()
         val apiBaseUrl = providers.gradleProperty("API_BASE_URL").orElse("").get()
@@ -40,7 +40,7 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    val composeBom = platform("androidx.compose:compose-bom:2025.12.00")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.ui:ui")

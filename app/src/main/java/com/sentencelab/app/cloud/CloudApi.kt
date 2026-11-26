@@ -38,6 +38,7 @@ class CloudApi {
         check(base.startsWith("https://")) { "HTTPS API 주소가 필요합니다." }
         val connection = URL(base + path).openConnection() as HttpURLConnection
         try {
+            connection.instanceFollowRedirects = false
             connection.requestMethod = method
             connection.connectTimeout = 12000
             connection.readTimeout = 12000
