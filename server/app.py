@@ -108,6 +108,11 @@ def init_db():
                     PRIMARY KEY (set_id,user_id)
                 );
                 CREATE INDEX IF NOT EXISTS curated_grants_by_user ON curated_grants(user_id);
+                CREATE TABLE IF NOT EXISTS curated_invites (
+                    set_id TEXT NOT NULL REFERENCES curated_sets(id) ON DELETE CASCADE,
+                    email TEXT NOT NULL,
+                    PRIMARY KEY (set_id,email)
+                );
             """)
             # Metadata only. No copyrighted textbook text is populated here.
             for set_id, title, order in [
@@ -221,6 +226,17 @@ def google_login(body: GoogleLogin):
             user_id = conn.execute(
                 "SELECT id FROM users WHERE google_sub=?", (sub,)
             ).fetchone()["id"]
+            # Claim pending access only when Google has verified this email.
+            # Invitations are one-time and become grants for the immutable sub.
+            verified_email = payload.get("email")
+            if payload.get("email_verified") is True and isinstance(verified_email, str):
+                verified_email = verified_email.strip().lower()
+                conn.execute(
+                    "INSERT OR IGNORE INTO curated_grants(set_id,user_id) "
+                    "SELECT set_id,? FROM curated_invites WHERE email=?",
+                    (user_id, verified_email),
+                )
+                conn.execute("DELETE FROM curated_invites WHERE email=?", (verified_email,))
             conn.execute(
                 "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES (?,?,?)",
                 (digest(session_token), user_id, now + SESSION_TTL),
