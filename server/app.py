@@ -32,7 +32,7 @@ CHALLENGE_TTL = 5 * 60
 MAX_SETS = 200
 MAX_CARDS = 20000
 # Only this Google-verified account may send copies to other SentenceLab accounts.
-COPY_SOURCE_EMAIL = "jsaursotdits00@gmail.com"
+COPY_SOURCE_EMAIL = os.getenv("SENTENCELAB_COPY_SOURCE_EMAIL", "").strip().lower()
 
 
 @contextmanager

@@ -12,7 +12,7 @@ Python 3.10 이상, Python venv, 로컬 SQLite3 필요.
 1. 서버 전용 디렉터리를 생성하고 server 하위 소스 파일을 복사합니다.
 2. python3 -m venv .venv
 3. .venv/bin/python -m pip install -r requirements.txt
-4. 환경 변수 GOOGLE_WEB_CLIENT_ID에 Google Cloud Web OAuth 클라이언트 ID를 설정합니다.
+4. 환경 변수 GOOGLE_WEB_CLIENT_ID에 Google Cloud Web OAuth 클라이언트 ID를 설정합니다.\n   세트 복사를 허용할 출발 계정은 SENTENCELAB_COPY_SOURCE_EMAIL 환경 변수로 지정합니다(미설정 시 기능 비활성화).
 5. 환경 변수 SENTENCELAB_DB에 /home/opc/sentencelab-data/sentencelab.sqlite3 를 설정합니다.
 6. .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8765 --workers 1
 7. 별도 HTTPS 역방향 프록시 또는 Cloudflare Tunnel로만 외부 연결을 허용합니다.
