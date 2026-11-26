@@ -8,3 +8,4 @@ local.properties
 *.aab
 captures/
 .DS_Store
+gradle/wrapper/gradle-wrapper.jar
