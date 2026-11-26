@@ -20,7 +20,7 @@ jobs:
 
     env:
       ORG_GRADLE_PROJECT_GOOGLE_WEB_CLIENT_ID: '227216295282-3i89nkjf47795541qdi6u5k44tlmro4k.apps.googleusercontent.com'
-      ORG_GRADLE_PROJECT_API_BASE_URL: ${{ vars.API_BASE_URL }}
+      ORG_GRADLE_PROJECT_API_BASE_URL: ${{ vars.API_BASE_URL || 'https://jsaur.duckdns.org/sentencelab' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
