@@ -67,7 +67,7 @@ GitHub Actions Secrets 설정에 다음 두 항목을 추가해야 고정 서명
 
 ## 등록된 공개 Google OAuth 웹 클라이언트 ID
 
-227216295282-m8plkfc50dj35reb9ruhklaec6uaucf1.apps.googleusercontent.com
+227216295282-3i89nkjf47795541qdi6u5k44tlmro4k.apps.googleusercontent.com
 
 이 값은 공개 ID이며 비밀번호나 클라이언트 보안 비밀번호가 아닙니다.
 Android APK 빌드에 반영됐고, Oracle에서는 `server/run_local.py`가 별도의
@@ -76,3 +76,9 @@ Android APK 빌드에 반영됐고, Oracle에서는 `server/run_local.py`가 별
 실제 로그인에는 Android OAuth 클라이언트의 서명 SHA-1 등록과 유효한 HTTPS API 주소가
 추가로 필요합니다. GitHub Actions Variables의 `API_BASE_URL`을 설정하고
 고정 서명 Secrets를 등록해야 합니다.
+
+### Android OAuth 클라이언트 식별
+
+Android 유형 클라이언트 ID: `227216295282-m8plkfc50dj35reb9ruhklaec6uaucf1.apps.googleusercontent.com` (Google Cloud Console에서 APK 패키지와 서명 지문을 등록하는 용도).
+
+앱에서 Google ID 토큰을 요청하고 서버가 audience를 확인하는 데는 **웹 유형** 클라이언트 ID `227216295282-3i89nkjf47795541qdi6u5k44tlmro4k.apps.googleusercontent.com`를 사용합니다.
