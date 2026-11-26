@@ -6,11 +6,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +46,15 @@ fun CloudAccountPanel(
     val local = remember(context) { CloudSession(context) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var isCopySource by remember(sessionToken) { mutableStateOf(false) }
+    var copyDialog by remember { mutableStateOf(false) }
+    var recipientEmail by remember { mutableStateOf("") }
+
+    LaunchedEffect(sessionToken) {
+        isCopySource = sessionToken?.let { token ->
+            runCatching { api.canCopySets(token) }.getOrDefault(false)
+        } ?: false
+    }
 
     fun execute(action: suspend () -> Unit) {
         if (busy) return
@@ -94,6 +106,12 @@ fun CloudAccountPanel(
                 OutlinedButton(enabled = !busy, onClick = onSyncNow) {
                     Text("지금 동기화")
                 }
+                if (isCopySource) {
+                    OutlinedButton(enabled = !busy, onClick = {
+                        recipientEmail = ""
+                        copyDialog = true
+                    }) { Text("다른 계정으로 전체 세트 복사") }
+                }
                 TextButton(enabled = !busy, onClick = {
                     execute {
                         val token = sessionToken ?: return@execute
@@ -112,5 +130,47 @@ fun CloudAccountPanel(
                 Text(message, style = MaterialTheme.typography.bodySmall)
             }
         }
+    }
+
+    if (copyDialog && isCopySource && sessionToken != null) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) copyDialog = false },
+            title = { Text("다른 계정으로 전체 세트 복사") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("받는 계정의 Google 이메일 주소를 입력하세요. 기존 세트는 유지되며, 동일한 세트는 중복 복사하지 않습니다.")
+                    OutlinedTextField(
+                        value = recipientEmail,
+                        onValueChange = { recipientEmail = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("받는 계정 이메일") },
+                        singleLine = true,
+                        enabled = !busy
+                    )
+                    Text("받는 계정은 SentenceLab에 한 번 이상 로그인해야 합니다.")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy && recipientEmail.contains("@"),
+                    onClick = {
+                        val token = sessionToken
+                        val email = recipientEmail.trim()
+                        execute {
+                            val copied = api.copySets(token, email)
+                            message = "복사 완료: 세트 " + copied.copiedSets +
+                                "개, 문장 " + copied.copiedSentences +
+                                "개 · 중복 제외 " + copied.skippedSets + "개"
+                            copyDialog = false
+                        }
+                    }
+                ) { Text("복사") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { copyDialog = false }) {
+                    Text("취소")
+                }
+            }
+        )
     }
 }

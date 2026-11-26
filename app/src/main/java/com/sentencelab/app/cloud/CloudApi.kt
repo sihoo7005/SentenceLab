@@ -20,6 +20,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 data class CloudSnapshot(val revision: Int, val sets: List<StudySet>)
+data class CopySetsResult(val copiedSets: Int, val copiedSentences: Int, val skippedSets: Int)
 
 class CloudConflictException : IllegalStateException("서버 데이터가 변경되어 다시 동기화합니다.")
 
@@ -56,6 +57,9 @@ class CloudApi {
             if (status !in 200..299) {
                 val description = when (status) {
                     401 -> "인증이 만료되었거나 로그인에 실패했습니다."
+                    403 -> "이 계정에는 세트 복사 권한이 없습니다."
+                    404 -> "받는 계정을 찾을 수 없습니다. 먼저 SentenceLab에 로그인해야 합니다."
+                    422 -> "받는 이메일 주소를 확인하세요."
                     503 -> "서버 로그인 설정이 아직 완료되지 않았습니다."
                     else -> "서버 요청 오류 (HTTP $status)"
                 }
@@ -81,6 +85,21 @@ class CloudApi {
 
     suspend fun accountId(token: String): String =
         request("GET", "/v1/me", token = token).getString("account_id")
+
+    suspend fun canCopySets(token: String): Boolean =
+        request("GET", "/v1/me", token = token).optBoolean("can_copy_sets", false)
+
+    suspend fun copySets(token: String, recipientEmail: String): CopySetsResult {
+        val data = request(
+            "POST", "/v1/sets/copy",
+            JSONObject().put("recipient_email", recipientEmail.trim()), token
+        )
+        return CopySetsResult(
+            data.getInt("copied_sets"),
+            data.getInt("copied_sentences"),
+            data.getInt("skipped_sets")
+        )
+    }
 
     suspend fun getSnapshot(token: String): CloudSnapshot {
         val data = request("GET", "/v1/snapshot", token = token)

@@ -11,6 +11,8 @@ import os
 import secrets
 import sqlite3
 import time
+import re
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
@@ -29,6 +31,8 @@ SESSION_TTL = 30 * 24 * 3600
 CHALLENGE_TTL = 5 * 60
 MAX_SETS = 200
 MAX_CARDS = 20000
+# Only this Google-verified account may send copies to other SentenceLab accounts.
+COPY_SOURCE_EMAIL = "jsaursotdits00@gmail.com"
 
 
 @contextmanager
@@ -184,6 +188,18 @@ class SnapshotIn(BaseModel):
     sets: list[SetIn] = Field(max_length=MAX_SETS)
 
 
+class CopySetsIn(BaseModel):
+    recipient_email: str = Field(min_length=5, max_length=320)
+
+    @field_validator("recipient_email")
+    @classmethod
+    def check_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not re.fullmatch(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", value):
+            raise ValueError("Invalid recipient email")
+        return value
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -301,7 +317,12 @@ def logout(
 @app.get("/v1/me")
 def account_identity(user_id: int = Depends(session_user)):
     # Stable per-account identifier for client-side sync lineage.
-    return {"account_id": str(user_id)}
+    with db() as conn:
+        row = conn.execute("SELECT email FROM users WHERE id=?", (user_id,)).fetchone()
+    return {
+        "account_id": str(user_id),
+        "can_copy_sets": bool(row and (row["email"] or "").lower() == COPY_SOURCE_EMAIL),
+    }
 
 
 @app.get("/v1/snapshot")
@@ -363,6 +384,120 @@ def get_curated_library(user_id: int = Depends(session_user)):
                 } for card in cards],
             })
     return {"sets": result}
+
+
+
+@app.post("/v1/sets/copy")
+def copy_sets(body: CopySetsIn, user_id: int = Depends(session_user)):
+    """Copy only from the designated, authenticated account; never overwrite recipients."""
+    with db() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            source = conn.execute("SELECT email FROM users WHERE id=?", (user_id,)).fetchone()
+            if source is None or (source["email"] or "").lower() != COPY_SOURCE_EMAIL:
+                raise HTTPException(403, "Only the source account can copy its sets")
+            recipients = conn.execute(
+                "SELECT id FROM users WHERE lower(email)=?", (body.recipient_email,)
+            ).fetchall()
+            if not recipients:
+                raise HTTPException(404, "Recipient must sign in to SentenceLab first")
+            if len(recipients) != 1:
+                raise HTTPException(422, "Recipient account is ambiguous")
+            recipient_id = recipients[0]["id"]
+            if recipient_id == user_id:
+                raise HTTPException(400, "Cannot copy to the same account")
+
+            originals = conn.execute(
+                "SELECT id,title FROM sets WHERE user_id=? ORDER BY position,id",
+                (user_id,),
+            ).fetchall()
+            destinations = conn.execute(
+                "SELECT id,title FROM sets WHERE user_id=? ORDER BY position,id",
+                (recipient_id,),
+            ).fetchall()
+            dest_titles = {row["title"] for row in destinations}
+            signatures = {}
+            for row in destinations:
+                cards = conn.execute(
+                    "SELECT english,korean FROM sentences WHERE set_id=? ORDER BY position,id",
+                    (row["id"],),
+                ).fetchall()
+                signatures.setdefault(row["title"], set()).add(
+                    tuple((card["english"], card["korean"]) for card in cards)
+                )
+            dest_cards = conn.execute(
+                "SELECT COUNT(*) FROM sentences c JOIN sets s ON s.id=c.set_id "
+                "WHERE s.user_id=?", (recipient_id,),
+            ).fetchone()[0]
+
+            prepared = []
+            skipped = 0
+            for origin in originals:
+                copy_id = str(uuid.uuid5(
+                    uuid.NAMESPACE_URL, f"sentencelab:copy:{user_id}:{recipient_id}:{origin['id']}"
+                ))
+                if any(existing["id"] == copy_id for existing in destinations):
+                    skipped += 1
+                    continue
+                source_cards = conn.execute(
+                    "SELECT * FROM sentences WHERE set_id=? ORDER BY position,id",
+                    (origin["id"],),
+                ).fetchall()
+                signature = tuple((row["english"], row["korean"]) for row in source_cards)
+                if signature in signatures.get(origin["title"], set()):
+                    skipped += 1
+                    continue
+
+                title = origin["title"]
+                if title in dest_titles:
+                    # Different content with the same name should not be discarded or overwritten.
+                    suffix = 1
+                    while True:
+                        extra = " (복사본)" if suffix == 1 else f" (복사본 {suffix})"
+                        candidate = title[:200 - len(extra)] + extra
+                        if candidate not in dest_titles:
+                            title = candidate
+                            break
+                        suffix += 1
+                dest_titles.add(title)
+                signatures.setdefault(origin["title"], set()).add(signature)
+                prepared.append((copy_id, title, source_cards))
+
+            add_count = sum(len(cards) for _, _, cards in prepared)
+            if len(destinations) + len(prepared) > MAX_SETS or dest_cards + add_count > MAX_CARDS:
+                raise HTTPException(413, "Recipient has reached the storage limit")
+
+            for index, (new_set_id, title, cards) in enumerate(prepared):
+                conn.execute(
+                    "INSERT INTO sets(id,user_id,title,position) VALUES (?,?,?,?)",
+                    (new_set_id, recipient_id, title, len(destinations) + index),
+                )
+                for position, card in enumerate(cards):
+                    new_card_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"sentencelab:copycard:{user_id}:{recipient_id}:{card['id']}"
+                    ))
+                    conn.execute(
+                        "INSERT INTO sentences(id,set_id,english,korean,chunks_json,"
+                        "attempts,correct,needs_review,completed,position) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (new_card_id, new_set_id, card["english"], card["korean"],
+                         card["chunks_json"], card["attempts"], card["correct"],
+                         card["needs_review"], card["completed"], position),
+                    )
+            if prepared:
+                conn.execute(
+                    "UPDATE users SET revision=revision+1 WHERE id=?", (recipient_id,)
+                )
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    return {
+        "copied_sets": len(prepared),
+        "copied_sentences": add_count,
+        "skipped_sets": skipped,
+    }
 
 
 @app.put("/v1/snapshot")

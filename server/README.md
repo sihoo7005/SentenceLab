@@ -28,6 +28,7 @@ POST /v1/auth/challenge: 일회용 nonce 생성
 POST /v1/auth/google: Google ID 토큰 검증 후 앱 세션 발급
 POST /v1/auth/logout: 앱 세션 종료
 GET /v1/snapshot: 개인별 세트와 문장 조회
+POST /v1/sets/copy: 지정된 계정만 자신의 전체 세트를 기존 로그인 계정으로 복사 (Bearer 로그인 필요)
 PUT /v1/snapshot: revision 일치 시 개인별 데이터 덮어쓰기
 DELETE /v1/account: 해당 계정의 서버 데이터 삭제
 
