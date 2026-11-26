@@ -55,6 +55,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY,
                     google_sub TEXT NOT NULL UNIQUE,
+                    email TEXT,
                     revision INTEGER NOT NULL DEFAULT 0,
                     created_at INTEGER NOT NULL
                 );
@@ -114,6 +115,11 @@ def init_db():
                     PRIMARY KEY (set_id,email)
                 );
             """)
+            # Migrate existing accounts without changing stable IDs or study data.
+            user_fields = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+            if "email" not in user_fields:
+                conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS users_email_lookup ON users(email)")
             # Metadata only. No copyrighted textbook text is populated here.
             for set_id, title, order in [
                 ("ybm-english-ii-lesson-2", "YBM 영어II 2과", 0),
@@ -226,17 +232,26 @@ def google_login(body: GoogleLogin):
             user_id = conn.execute(
                 "SELECT id FROM users WHERE google_sub=?", (sub,)
             ).fetchone()["id"]
-            # Claim pending access only when Google has verified this email.
-            # Invitations are one-time and become grants for the immutable sub.
+            # Only store an email that Google has confirmed for this identity.
+            # Unverified or absent emails do not overwrite a saved address.
             verified_email = payload.get("email")
             if payload.get("email_verified") is True and isinstance(verified_email, str):
                 verified_email = verified_email.strip().lower()
-                conn.execute(
-                    "INSERT OR IGNORE INTO curated_grants(set_id,user_id) "
-                    "SELECT set_id,? FROM curated_invites WHERE email=?",
-                    (user_id, verified_email),
-                )
-                conn.execute("DELETE FROM curated_invites WHERE email=?", (verified_email,))
+                if 0 < len(verified_email) <= 320 and "@" in verified_email:
+                    conn.execute(
+                        "UPDATE users SET email=? WHERE id=?",
+                        (verified_email, user_id),
+                    )
+                    # Claim pending access by email, but keep grants bound to Google sub.
+                    conn.execute(
+                        "INSERT OR IGNORE INTO curated_grants(set_id,user_id) "
+                        "SELECT set_id,? FROM curated_invites WHERE email=?",
+                        (user_id, verified_email),
+                    )
+                    conn.execute(
+                        "DELETE FROM curated_invites WHERE email=?",
+                        (verified_email,),
+                    )
             conn.execute(
                 "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES (?,?,?)",
                 (digest(session_token), user_id, now + SESSION_TTL),
