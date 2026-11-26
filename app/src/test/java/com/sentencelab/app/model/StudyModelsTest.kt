@@ -52,8 +52,8 @@ class StudyModelsTest {
         assertTrue(matchesNextWord("the", "the"))
         assertFalse(matchesNextWord("world", "word"))
     }
-    @Test fun completedCardsDisappearFromAllNormalModes() {
-        val finished = Sentence(id = "done", english = "Done.", korean = "끝", completed = true)
+    @Test fun completedCardsDisappearOnlyFromCompletedModes() {
+        val finished = Sentence(id = "done", english = "Done.", korean = "끝", completed = true, modeMask = 15)
         val fresh = Sentence(id = "new", english = "New.", korean = "새로운", completed = false)
         for (mode in StudyMode.entries) {
             val list = eligibleForStudy(listOf(finished, fresh), mode, reviewOnly = false)
@@ -64,7 +64,7 @@ class StudyModelsTest {
     @Test fun explicitlyRequestedReviewCanIncludeCompletedMistakes() {
         val mistake = Sentence(
             id = "mistake", english = "Hello.", korean = "안녕",
-            completed = true, needsReview = true
+            completed = true, needsReview = true, modeMask = StudyMode.ORDER.bit
         )
         assertEquals(
             listOf("mistake"),
@@ -82,4 +82,26 @@ class StudyModelsTest {
         )
     }
 
+
+    @Test fun blankUsesImportantWordsAndPreservesCompounds() {
+        val words = blankWords("The well-known researcher can't overlook evidence.", BlankDifficulty.HARD, kotlin.random.Random(1))
+        assertTrue(words.all { it.answer.lowercase() != "the" })
+        assertTrue(words.all { it.answer in listOf("well-known", "researcher", "can't", "overlook", "evidence") })
+        assertEquals(words.size, Regex("_____").findAll(blankPrompt("The well-known researcher can't overlook evidence.", words)).count())
+        assertTrue(matchesBlank("can’t", "CAN'T"))
+        assertFalse(matchesBlank("well-known", "wellknown"))
+    }
+    @Test fun difficultyRaisesBlankCountAndModesAreIndependent() {
+        val sentence = "Researchers carefully examine complex evidence before developing reliable conclusions."
+        assertTrue(blankWords(sentence, BlankDifficulty.HARD).size > blankWords(sentence, BlankDifficulty.EASY).size)
+        val card = Sentence(english = sentence, korean = "연구", completed = true, modeMask = StudyMode.BLANK.bit)
+        assertTrue(eligibleForStudy(listOf(card), StudyMode.BLANK, false).isEmpty())
+        assertEquals(1, eligibleForStudy(listOf(card), StudyMode.ORDER, false).size)
+        assertEquals(0, resetStudyProgress(listOf(card)).single().modeMask)
+    }
+    @Test fun legacyProgressIsPreservedButDoesNotClaimSpecificMode() {
+        val card = Sentence(english = "Legacy sentence.", korean = "이전 문장", attempts = 1, correct = 1, completed = true)
+        assertEquals(1, eligibleForStudy(listOf(card), StudyMode.BLANK, false).size)
+        assertEquals(1, card.correct)
+    }
 }

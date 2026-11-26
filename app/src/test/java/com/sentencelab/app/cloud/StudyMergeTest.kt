@@ -145,4 +145,15 @@ class StudyMergeTest {
         assertTrue(merged.single().cards.single().completed)
     }
 
+
+    @Test fun concurrentModesAreCombinedAndResetClearsModes() {
+        val base = group(card("a"))
+        val local = group(card("a", 1, 1).copy(completed = true, modeMask = 2))
+        val remote = group(card("a", 1, 1).copy(completed = true, modeMask = 8))
+        val merged = StudyMerge.merge(listOf(base), listOf(local), listOf(remote)).single().cards.single()
+        assertEquals(10, merged.modeMask)
+        val reset = group(resetStudyProgress(listOf(merged)).single())
+        val stale = group(merged.copy(attempts = 3))
+        assertEquals(0, StudyMerge.merge(listOf(group(merged)), listOf(reset), listOf(stale)).single().cards.single().modeMask)
+    }
 }

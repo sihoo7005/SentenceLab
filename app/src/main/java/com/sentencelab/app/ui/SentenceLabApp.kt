@@ -55,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.sentencelab.app.data.DocumentImporter
 import com.sentencelab.app.data.ImportedDocument
@@ -68,6 +69,12 @@ import com.sentencelab.app.model.Sentence
 import com.sentencelab.app.model.StudyMode
 import com.sentencelab.app.model.StudySet
 import com.sentencelab.app.model.normalized
+import com.sentencelab.app.model.BlankDifficulty
+import com.sentencelab.app.model.blankWords
+import com.sentencelab.app.model.blankPrompt
+import com.sentencelab.app.model.matchesBlank
+import com.sentencelab.app.model.completedIn
+import com.sentencelab.app.model.allModesCompleted
 import com.sentencelab.app.model.parseBulk
 import com.sentencelab.app.model.parseChunks
 import com.sentencelab.app.model.eligibleForStudy
@@ -288,7 +295,8 @@ fun SentenceLabApp() {
                                     attempts = card.attempts + 1,
                                     correct = card.correct + if (isCorrect) 1 else 0,
                                     needsReview = !isCorrect,
-                                    completed = true
+                                    completed = true,
+                                    modeMask = card.modeMask or studyMode!!.bit
                                 )
                             })
                         })
@@ -334,7 +342,7 @@ fun SentenceLabApp() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(directCard.english, maxLines = 3)
-                    if (directCard.completed) {
+                    if (directCard.modeMask != 0 || directCard.completed) {
                         Text("✓ 이미 완료한 문장도 다시 학습할 수 있습니다.")
                     }
                     StudyMode.entries.forEach { mode ->
@@ -637,7 +645,7 @@ private fun SetScreen(
                 enabled = KoreanTranslator.missing(set.cards).isNotEmpty()
             ) { Text("빈 한국어 해석 자동 채우기") }
         }
-        Text("학습 모드 · 미완료 " + set.cards.count { !it.completed } + "개",
+        Text("학습 모드 · 전체 미완료 " + set.cards.count { !it.allModesCompleted() } + "개",
             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -646,10 +654,10 @@ private fun SetScreen(
             StudyMode.entries.forEach { mode ->
                 FilledTonalButton(
                     enabled = set.cards.any {
-                        !it.completed && (mode != StudyMode.SPELL || it.korean.isNotBlank())
+                        !it.completedIn(mode) && (mode != StudyMode.SPELL || it.korean.isNotBlank())
                     },
                     onClick = { onStudy(mode, false) }
-                ) { Text(mode.label) }
+                ) { Text(mode.label + " · " + eligibleForStudy(set.cards, mode, false).size) }
             }
             OutlinedButton(
                 enabled = set.cards.any { it.needsReview },
@@ -683,8 +691,10 @@ private fun SetScreen(
                         Text(card.english, style = MaterialTheme.typography.bodyLarge)
                         Spacer(Modifier.height(4.dp))
                         Text(card.korean, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (card.completed) {
-                            Text("✓ 학습 완료", color = MaterialTheme.colorScheme.primary)
+                        if (card.modeMask != 0) {
+                            Text("✓ " + StudyMode.entries.filter { card.completedIn(it) }.joinToString(" · ") { it.label }, color = MaterialTheme.colorScheme.primary)
+                        } else if (card.completed) {
+                            Text("이전 학습 기록 있음", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if (card.needsReview) {
                             Text("복습 필요", color = MaterialTheme.colorScheme.error)
@@ -818,6 +828,8 @@ private fun StudyScreen(
 ) {
     val cards = sessionIds.mapNotNull { id -> set.cards.firstOrNull { it.id == id } }
     var position by remember(sessionIds, mode) { mutableIntStateOf(0) }
+    var blankDifficulty by remember(sessionIds, mode) { mutableStateOf(BlankDifficulty.NORMAL) }
+    var blankDifficultyConfirmed by remember(sessionIds, mode) { mutableStateOf(false) }
 
     val context = LocalContext.current
     var ttsReady by remember { mutableStateOf(false) }
@@ -843,7 +855,15 @@ private fun StudyScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        if (position >= cards.size) {
+        if (mode == StudyMode.BLANK && !blankDifficultyConfirmed) {
+            Text("빈칸 난이도", style = MaterialTheme.typography.headlineSmall)
+            BlankDifficulty.entries.forEach { level ->
+                OutlinedButton(onClick = { blankDifficulty = level }, modifier = Modifier.fillMaxWidth()) {
+                    Text((if (blankDifficulty == level) "✓ " else "") + level.label + " · 약 " + (level.fraction * 100).toInt() + "%")
+                }
+            }
+            Button(onClick = { blankDifficultyConfirmed = true }) { Text("학습 시작") }
+        } else if (position >= cards.size) {
             Text("학습 완료", style = MaterialTheme.typography.headlineMedium)
             Text(cards.size.toString() + "개 문장을 학습했습니다.")
             Button(onClick = onClose) { Text("세트로 돌아가기") }
@@ -886,6 +906,7 @@ private fun StudyScreen(
                     )
                     StudyMode.BLANK -> BlankQuestion(
                         card = card,
+                        difficulty = blankDifficulty,
                         onGrade = { onGrade(card.id, it) },
                         onNext = { position += 1 }
                     )
@@ -1070,28 +1091,54 @@ private fun WrittenQuestion(
 @Composable
 private fun BlankQuestion(
     card: Sentence,
+    difficulty: BlankDifficulty,
     onGrade: (Boolean) -> Unit,
     onNext: () -> Unit
 ) {
-    val match = remember(card.id) {
-        Regex("[\\p{L}]{2,}").find(card.english)
-    }
-    if (match == null) {
+    val blanks = remember(card.id, card.english, difficulty) { blankWords(card.english, difficulty) }
+    var answers by remember(card.id, blanks) { mutableStateOf(List(blanks.size) { "" }) }
+    var result by remember(card.id, blanks) { mutableStateOf<List<Boolean>?>(null) }
+    if (blanks.isEmpty()) {
         Text("빈칸을 만들 수 없는 문장입니다.")
         Button(onClick = onNext) { Text("다음 문장") }
+        return
+    }
+    Text("빈칸 ${blanks.size}개를 모두 채우세요.")
+    Text(blankPrompt(card.english, blanks), style = MaterialTheme.typography.titleLarge)
+    blanks.forEachIndexed { index, word ->
+        val graded = result?.get(index)
+        OutlinedTextField(
+            value = answers[index],
+            onValueChange = { value ->
+                if (result == null) answers = answers.toMutableList().also { it[index] = value }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("빈칸 ${index + 1}") },
+            singleLine = true,
+            readOnly = result != null,
+            isError = graded == false
+        )
+        if (graded != null) {
+            Text(
+                if (graded) "✓ 정답" else "✗ 정답: ${word.answer}",
+                color = if (graded) {
+                    if (isSystemInDarkTheme()) Color(0xFF81C784) else Color(0xFF176B35)
+                } else MaterialTheme.colorScheme.error
+            )
+        }
+    }
+    if (result == null) {
+        Button(
+            enabled = answers.all { it.isNotBlank() },
+            onClick = {
+                val grades = blanks.mapIndexed { index, word -> matchesBlank(word.answer, answers[index]) }
+                result = grades
+                onGrade(grades.all { it })
+            }
+        ) { Text("정답 확인") }
     } else {
-        Text("빈칸에 들어갈 영어 단어를 입력하세요.")
-        Text(
-            card.english.replaceRange(match.range, "_____"),
-            style = MaterialTheme.typography.titleLarge
-        )
-        WrittenQuestion(
-            card = card,
-            prompt = "빠진 단어는 무엇일까요?",
-            correctAnswer = match.value,
-            onGrade = onGrade,
-            onNext = onNext
-        )
+        Text("${result!!.count { it }} / ${blanks.size} 정답")
+        CheckResult(result!!.all { it }, card.english, onNext)
     }
 }
 

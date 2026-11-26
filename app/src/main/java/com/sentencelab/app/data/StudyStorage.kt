@@ -35,7 +35,8 @@ class StudyStorage(context: Context, fileName: String = "sets.json") {
                             attempts = card.optInt("attempts"),
                             correct = card.optInt("correct"),
                             needsReview = card.optBoolean("needsReview"),
-                            completed = card.optBoolean("completed", card.optInt("attempts") > 0)
+                            completed = card.optBoolean("completed", card.optInt("attempts") > 0),
+                            modeMask = card.optInt("modeMask", 0)
                         )
                     }
                 )
@@ -60,6 +61,7 @@ class StudyStorage(context: Context, fileName: String = "sets.json") {
                         .put("correct", card.correct)
                         .put("needsReview", card.needsReview)
                         .put("completed", card.completed)
+                        .put("modeMask", card.modeMask)
                 )
             }
             array.put(JSONObject().put("id", set.id).put("title", set.title).put("cards", cards))

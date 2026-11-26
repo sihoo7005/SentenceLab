@@ -51,7 +51,7 @@ object StudyMerge {
         if (base == null) return when {
             local == null -> remote
             remote == null -> local
-            else -> local.copy(completed = local.completed || remote.completed)
+            else -> local.copy(completed = local.completed || remote.completed, modeMask = local.modeMask or remote.modeMask)
         }
         if (local == null && remote == null) return null
         if (local == null) return if (remote == base) null else remote
@@ -74,15 +74,16 @@ object StudyMerge {
             correct = if (wasReset) 0 else newCorrect.coerceAtMost(newAttempts),
             needsReview = if (wasReset) false else
                 if (local.needsReview != base.needsReview) local.needsReview else remote.needsReview,
-            completed = if (wasReset) false else local.completed || remote.completed
+            completed = if (wasReset) false else local.completed || remote.completed,
+            modeMask = if (wasReset) 0 else local.modeMask or remote.modeMask
         )
     }
 
     private fun hasBeenReset(base: Sentence, updated: Sentence): Boolean {
         val previouslyStudied = base.attempts > 0 || base.correct > 0 ||
-            base.completed || base.needsReview
+            base.completed || base.needsReview || base.modeMask != 0
         return previouslyStudied && updated.attempts == 0 && updated.correct == 0 &&
-            !updated.completed && !updated.needsReview
+            !updated.completed && !updated.needsReview && updated.modeMask == 0
     }
 }
 

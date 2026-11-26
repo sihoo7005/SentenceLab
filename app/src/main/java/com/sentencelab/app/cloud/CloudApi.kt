@@ -121,7 +121,8 @@ class CloudApi {
                         attempts = card.getInt("attempts"),
                         correct = card.getInt("correct"),
                         needsReview = card.getBoolean("needsReview"),
-                        completed = card.optBoolean("completed", card.optInt("attempts") > 0)
+                        completed = card.optBoolean("completed", card.optInt("attempts") > 0),
+                            modeMask = card.optInt("modeMask", 0)
                     )
                 }
             )
@@ -142,7 +143,8 @@ class CloudApi {
                     .put("attempts", card.attempts)
                     .put("correct", card.correct)
                     .put("needsReview", card.needsReview)
-                    .put("completed", card.completed))
+                    .put("completed", card.completed)
+                        .put("modeMask", card.modeMask))
             }
             groups.put(JSONObject().put("id", set.id).put("title", set.title).put("cards", cards))
         }
