@@ -60,6 +60,12 @@ jobs:
           fi
           umask 077
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/sentencelab-signing.p12"
+          file_bytes=$(wc -c < "$RUNNER_TEMP/sentencelab-signing.p12")
+          echo "Decoded signing file: ${file_bytes} bytes (expected 3386 bytes)."
+          if [[ "$file_bytes" -ne 3386 ]]; then
+            echo "::error::GitHub signing secret was truncated or changed. Restore all 4516 base64 characters."
+            exit 1
+          fi
           echo "SENTENCELAB_SIGNING_STORE_FILE=$RUNNER_TEMP/sentencelab-signing.p12" >> "$GITHUB_ENV"
           echo "SENTENCELAB_SIGNING_STORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
           echo "Stable APK signing enabled."
