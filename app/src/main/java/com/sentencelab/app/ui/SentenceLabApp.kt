@@ -12,6 +12,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -69,6 +71,7 @@ import com.sentencelab.app.model.normalized
 import com.sentencelab.app.model.parseBulk
 import com.sentencelab.app.model.parseChunks
 import com.sentencelab.app.model.eligibleForStudy
+import com.sentencelab.app.model.resetStudyProgress
 import com.sentencelab.app.model.validChunks
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -104,6 +107,7 @@ fun SentenceLabApp() {
     var importing by remember { mutableStateOf(false) }
     var deletingCard by remember { mutableStateOf<Sentence?>(null) }
     var deletingSet by remember { mutableStateOf(false) }
+    var resetProgressSetId by remember { mutableStateOf<String?>(null) }
     var directStudyCardId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     var fileImportTargetId by remember { mutableStateOf<String?>(null) }
@@ -307,6 +311,7 @@ fun SentenceLabApp() {
                     },
                     onDeleteCard = { deletingCard = it },
                     onDeleteSet = { deletingSet = true },
+                    onResetProgress = { resetProgressSetId = selected.id },
                     onDirectStudy = { card -> directStudyCardId = card.id },
                     onTranslateMissing = {
                         translateMissing(selected.id, selected.cards)
@@ -524,6 +529,24 @@ fun SentenceLabApp() {
         )
     }
 
+    val resetSet = sets.firstOrNull { it.id == resetProgressSetId }
+    if (resetSet != null) {
+        ConfirmDelete(
+            title = "이 세트의 학습 상태를 초기화할까요?",
+            content = "완료 표시, 시도 횟수, 정답 횟수, 오답 복습 기록이 초기화됩니다.\n영어 문장과 한국어 해석은 그대로 유지됩니다.",
+            onCancel = { resetProgressSetId = null },
+            onDelete = {
+                save(sets.map { studySet ->
+                    if (studySet.id == resetSet.id) studySet.copy(
+                        cards = resetStudyProgress(studySet.cards)
+                    ) else studySet
+                })
+                resetProgressSetId = null
+            },
+            confirmLabel = "초기화"
+        )
+    }
+
     if (selected != null && deletingSet) {
         ConfirmDelete(
             title = "세트를 삭제할까요?",
@@ -596,6 +619,7 @@ private fun SetScreen(
     onImportFile: () -> Unit,
     onDeleteCard: (Sentence) -> Unit,
     onDeleteSet: () -> Unit,
+    onResetProgress: () -> Unit,
     onDirectStudy: (Sentence) -> Unit,
     onTranslateMissing: () -> Unit,
     onStudy: (StudyMode, Boolean) -> Unit
@@ -641,7 +665,15 @@ private fun SetScreen(
                 "문장 목록 (" + set.cards.size + ")",
                 style = MaterialTheme.typography.titleMedium
             )
-            TextButton(onClick = onDeleteSet) { Text("세트 삭제") }
+            Row {
+                TextButton(
+                    onClick = onResetProgress,
+                    enabled = set.cards.any {
+                        it.attempts > 0 || it.correct > 0 || it.completed || it.needsReview
+                    }
+                ) { Text("학습 초기화") }
+                TextButton(onClick = onDeleteSet) { Text("세트 삭제") }
+            }
         }
         if (set.cards.isEmpty()) Text("문장을 추가하면 학습을 시작할 수 있습니다.")
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -764,13 +796,14 @@ private fun ConfirmDelete(
     title: String,
     content: String,
     onCancel: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    confirmLabel: String = "삭제"
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text(title) },
         text = { Text(content) },
-        confirmButton = { TextButton(onClick = onDelete) { Text("삭제") } },
+        confirmButton = { TextButton(onClick = onDelete) { Text(confirmLabel) } },
         dismissButton = { TextButton(onClick = onCancel) { Text("취소") } }
     )
 }
@@ -807,7 +840,7 @@ private fun StudyScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(18.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         if (position >= cards.size) {
@@ -929,46 +962,68 @@ private fun OrderQuestion(
             Text("완료: " + groups.take(groupIndex).flatten().joinToString(" "))
         }
     }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            if (selected.isEmpty()) Text("올바른 순서로 단어를 선택하세요.")
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+    // Answer area stays fixed as the completed words accumulate.
+    Card(modifier = Modifier.fillMaxWidth().height(220.dp)) {
+        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            Text(
+                "배열한 단어 " + selected.size + " / " + words.size,
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(8.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth().weight(1f)
+                    .verticalScroll(rememberScrollState())
             ) {
-                selected.forEach { index ->
-                    OutlinedButton(onClick = {}, enabled = false) {
-                        Text(words[index])
+                if (selected.isEmpty()) {
+                    Text(
+                        "올바른 순서로 단어를 선택하세요.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    selected.forEach { index ->
+                        OutlinedButton(onClick = {}, enabled = false) {
+                            Text(words[index])
+                        }
                     }
                 }
             }
         }
     }
+    // Buttons never leave the word bank: completed words are disabled in place.
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        choices.filterNot { it in selected }.forEach { index ->
-            FilledTonalButton(onClick = {
-                val expected = words[selected.size]
-                if (!com.sentencelab.app.model.matchesNextWord(expected, words[index])) {
-                    hadMistake = true
-                    lastTapWrong = true
-                } else {
-                    lastTapWrong = false
-                    val next = selected + index
-                    if (next.size == words.size) {
-                        if (groupIndex == groups.lastIndex) {
-                            complete = true
-                            onGrade(!hadMistake)
+        choices.forEach { index ->
+            key(index) {
+                FilledTonalButton(
+                    enabled = index !in selected,
+                    onClick = {
+                        val expected = words[selected.size]
+                        if (!com.sentencelab.app.model.matchesNextWord(expected, words[index])) {
+                            hadMistake = true
+                            lastTapWrong = true
                         } else {
-                            groupIndex += 1
+                            lastTapWrong = false
+                            val next = selected + index
+                            if (next.size == words.size) {
+                                if (groupIndex == groups.lastIndex) {
+                                    complete = true
+                                    onGrade(!hadMistake)
+                                } else {
+                                    groupIndex += 1
+                                }
+                            } else {
+                                selected = next
+                            }
                         }
-                    } else {
-                        selected = next
                     }
-                }
-            }) { Text(words[index]) }
+                ) { Text(words[index]) }
+            }
         }
     }
     if (lastTapWrong) {

@@ -57,6 +57,8 @@ object StudyMerge {
         if (local == null) return if (remote == base) null else remote
         if (remote == null) return if (local == base) null else local
         if (local == remote) return local
+        // A deliberate reset must beat stale completed flags and counters from other devices.
+        val wasReset = hasBeenReset(base, local) || hasBeenReset(base, remote)
         val newAttempts = base.attempts +
             (local.attempts - base.attempts).coerceAtLeast(0) +
             (remote.attempts - base.attempts).coerceAtLeast(0)
@@ -68,11 +70,19 @@ object StudyMerge {
             english = if (local.english != base.english) local.english else remote.english,
             korean = if (local.korean != base.korean) local.korean else remote.korean,
             chunks = if (local.chunks != base.chunks) local.chunks else remote.chunks,
-            attempts = newAttempts,
-            correct = newCorrect.coerceAtMost(newAttempts),
-            needsReview = if (local.needsReview != base.needsReview) local.needsReview else remote.needsReview,
-            completed = local.completed || remote.completed
+            attempts = if (wasReset) 0 else newAttempts,
+            correct = if (wasReset) 0 else newCorrect.coerceAtMost(newAttempts),
+            needsReview = if (wasReset) false else
+                if (local.needsReview != base.needsReview) local.needsReview else remote.needsReview,
+            completed = if (wasReset) false else local.completed || remote.completed
         )
+    }
+
+    private fun hasBeenReset(base: Sentence, updated: Sentence): Boolean {
+        val previouslyStudied = base.attempts > 0 || base.correct > 0 ||
+            base.completed || base.needsReview
+        return previouslyStudied && updated.attempts == 0 && updated.correct == 0 &&
+            !updated.completed && !updated.needsReview
     }
 }
 

@@ -69,3 +69,7 @@ fun eligibleForStudy(cards: List<Sentence>, mode: StudyMode, reviewOnly: Boolean
         (if (reviewOnly) card.needsReview else !card.completed) &&
             (mode != StudyMode.SPELL || card.korean.isNotBlank())
     }
+
+/** Reset only study progress; keep card IDs, sentences, translations and chunks. */
+fun resetStudyProgress(cards: List<Sentence>): List<Sentence> =
+    cards.map { it.copy(attempts = 0, correct = 0, needsReview = false, completed = false) }
