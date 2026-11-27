@@ -115,16 +115,7 @@ fun CloudAccountPanel(
                 }
                 if (!canLogout) Text("미저장 변경을 저장하거나 버린 후 계정을 변경하세요.")
                 TextButton(enabled = !busy && canLogout, onClick = {
-                    execute {
-                        val token = sessionToken ?: return@execute
-                        try {
-                            api.logout(token)
-                        } finally {
-                            local.clear()
-                            onSessionChanged(null)
-                        }
-                        message = "로그아웃했습니다. 계정 데이터는 서버에 보존됩니다."
-                    }
+                    onSessionChanged(null)
                 }) { Text("로그아웃") }
             }
             if (busy) Text("처리 중…")

@@ -93,9 +93,27 @@ fun SentenceLabApp() {
     val context = LocalContext.current
     val cloudSession = remember { CloudSession(context.applicationContext) }
     var sessionToken by remember { mutableStateOf(cloudSession.load()) }
+    val accountScope = rememberCoroutineScope()
     // A new account gets an entirely new screen, coroutine scope and in-memory data.
     key(sessionToken) {
-        ServerStudyScreen(sessionToken = sessionToken, onSessionChanged = { sessionToken = it })
+        ServerStudyScreen(sessionToken = sessionToken, onSessionChanged = { next ->
+            val previous = sessionToken
+            if (next == null) cloudSession.clear()
+            sessionToken = next
+            // Revoke the old token without letting a slow logout race with edits
+            // or clear a subsequently logged-in account.
+            if (next == null && previous != null) {
+                accountScope.launch {
+                    try {
+                        CloudApi().logout(previous)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Local sign-out already succeeded.
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -159,7 +177,7 @@ private fun ServerStudyScreen(
         if (sessionToken == null || !serverState.ready) return
         serverState = serverState.edit(updated)
         syncStatus = if (serverState.conflict) "다른 기기의 변경과 충돌 · 미저장 변경이 있습니다."
-            else if (serverState.dirty) "서버 저장 대기 중…" else "서버 저장 완료"
+            else if (serverState.dirty || serverState.attempted != null) "서버 저장 대기 중…" else "서버 저장 완료"
         syncSignals.trySend(Unit)
     }
 
@@ -328,7 +346,12 @@ private fun ServerStudyScreen(
                     canLogout = !serverState.dirty && serverState.attempted == null && !translationBusy && !fileImportBusy,
                     canDiscard = (serverState.dirty || serverState.attempted != null) && !syncBusy && !translationBusy && !fileImportBusy,
                     onDiscard = { discardDialog = true },
-                    onSessionChanged = onSessionChanged
+                    onSessionChanged = { next ->
+                        if (next != null || (!serverState.dirty && serverState.attempted == null &&
+                                !translationBusy && !fileImportBusy)) {
+                            onSessionChanged(next)
+                        }
+                    }
                 )
                 studyMode != null -> StudyScreen(
                     set = selected,

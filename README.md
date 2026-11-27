@@ -148,3 +148,16 @@ Android APK 빌드에 반영됐고, Oracle에서는 `server/run_local.py`가 별
 Android 유형 클라이언트 ID: `227216295282-m8plkfc50dj35reb9ruhklaec6uaucf1.apps.googleusercontent.com` (Google Cloud Console에서 APK 패키지와 서명 지문을 등록하는 용도).
 
 앱에서 Google ID 토큰을 요청하고 서버가 audience를 확인하는 데는 **웹 유형** 클라이언트 ID `227216295282-3i89nkjf47795541qdi6u5k44tlmro4k.apps.googleusercontent.com`를 사용합니다.
+
+## v0.10.1 server-first study data
+
+Study sets and progress are loaded from the authenticated account's server snapshot.
+No local study file is read, written or merged by the app. Old local files are left
+untouched for recovery; they are not uploaded automatically. The session token
+remains in encrypted Android storage. A different account starts with empty RAM
+and fetches its own data. Writes use the last acknowledged server revision;
+conflicts never overwrite another device's newer data. A failed write stays in
+RAM and blocks logout until saved or explicitly discarded. Closing or restarting
+the app can lose unacknowledged changes. Offline study is not supported.
+Deploy the v0.10.0 server mode_mask migration before relying on persistent
+per-mode study progress.
