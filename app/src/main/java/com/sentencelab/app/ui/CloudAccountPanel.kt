@@ -37,6 +37,7 @@ fun CloudAccountPanel(
     sessionToken: String?,
     syncStatus: String,
     onSyncNow: () -> Unit,
+    canLogout: Boolean,
     onSessionChanged: (String?) -> Unit
 ) {
     val context = LocalContext.current
@@ -80,7 +81,7 @@ fun CloudAccountPanel(
             if (!api.configured) {
                 Text("Google 로그인 또는 API 주소가 설정되지 않았습니다.")
             } else if (sessionToken == null) {
-                Text("로그인하면 기기의 문장과 서버 데이터를 자동 동기화합니다.")
+                Text("로그인하면 해당 계정의 서버 문장과 학습 기록을 불러옵니다.")
                 Button(enabled = !busy, onClick = {
                     execute {
                         val nonce = api.challenge()
@@ -97,11 +98,11 @@ fun CloudAccountPanel(
                         val newToken = api.exchangeGoogleToken(google.idToken, nonce)
                         local.save(newToken)
                         onSessionChanged(newToken)
-                        message = "로그인 성공. 자동 동기화가 시작됩니다."
+                        message = "로그인 성공. 서버 데이터를 불러옵니다."
                     }
                 }) { Text("Google 계정으로 로그인") }
             } else {
-                Text("로그인됨 · 변경 시, 앱 재개 시, 앱 사용 중 주기적으로 동기화합니다.")
+                Text("로그인됨 · 학습 변경을 서버에 저장합니다.")
                 Text(syncStatus, style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(enabled = !busy, onClick = onSyncNow) {
                     Text("지금 동기화")
@@ -112,7 +113,8 @@ fun CloudAccountPanel(
                         copyDialog = true
                     }) { Text("다른 계정으로 전체 세트 복사") }
                 }
-                TextButton(enabled = !busy, onClick = {
+                if (!canLogout) Text("미저장 변경을 저장하거나 버린 후 계정을 변경하세요.")
+                TextButton(enabled = !busy && canLogout, onClick = {
                     execute {
                         val token = sessionToken ?: return@execute
                         try {
@@ -121,7 +123,7 @@ fun CloudAccountPanel(
                             local.clear()
                             onSessionChanged(null)
                         }
-                        message = "로그아웃했습니다. 기기 문장은 그대로 남습니다."
+                        message = "로그아웃했습니다. 계정 데이터는 서버에 보존됩니다."
                     }
                 }) { Text("로그아웃") }
             }

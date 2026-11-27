@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,10 +61,10 @@ import androidx.compose.ui.unit.dp
 import com.sentencelab.app.data.DocumentImporter
 import com.sentencelab.app.data.ImportedDocument
 import com.sentencelab.app.data.KoreanTranslator
-import com.sentencelab.app.data.StudyStorage
 import com.sentencelab.app.cloud.CloudSession
-import com.sentencelab.app.cloud.StudySync
-import com.sentencelab.app.cloud.StudyMerge
+import com.sentencelab.app.cloud.CloudApi
+import com.sentencelab.app.cloud.CloudConflictException
+import com.sentencelab.app.cloud.ServerStudyState
 import com.sentencelab.app.model.BulkEntry
 import com.sentencelab.app.model.Sentence
 import com.sentencelab.app.model.StudyMode
@@ -85,25 +86,35 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.onStart
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 
-@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
 fun SentenceLabApp() {
     val context = LocalContext.current
-    val storage = remember { StudyStorage(context.applicationContext) }
-    var sets by remember { mutableStateOf(storage.load()) }
     val cloudSession = remember { CloudSession(context.applicationContext) }
-    val syncEngine = remember { StudySync(context.applicationContext) }
     var sessionToken by remember { mutableStateOf(cloudSession.load()) }
-    var syncStatus by remember { mutableStateOf("동기화 준비 중") }
-    val syncSignals = remember {
-        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    // A new account gets an entirely new screen, coroutine scope and in-memory data.
+    key(sessionToken) {
+        ServerStudyScreen(sessionToken = sessionToken, onSessionChanged = { sessionToken = it })
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ServerStudyScreen(
+    sessionToken: String?,
+    onSessionChanged: (String?) -> Unit
+) {
+    val context = LocalContext.current
+    val api = remember { CloudApi() }
+    var serverState by remember { mutableStateOf(ServerStudyState()) }
+    val sets by remember { derivedStateOf { serverState.sets } }
+    var syncStatus by remember { mutableStateOf(if (sessionToken == null) "로그인이 필요합니다." else "서버 데이터 불러오는 중…") }
+    var syncBusy by remember { mutableStateOf(false) }
+    var discardDialog by remember { mutableStateOf(false) }
+    val syncSignals = remember { Channel<Unit>(Channel.CONFLATED) }
+    DisposableEffect(syncSignals) {
+        onDispose { syncSignals.close() }
     }
     var currentSetId by remember { mutableStateOf<String?>(null) }
     var studyMode by remember { mutableStateOf<StudyMode?>(null) }
@@ -145,9 +156,11 @@ fun SentenceLabApp() {
     }
 
     fun save(updated: List<StudySet>) {
-        storage.save(updated)
-        sets = updated
-        syncSignals.tryEmit(Unit)
+        if (sessionToken == null || !serverState.ready) return
+        serverState = serverState.edit(updated)
+        syncStatus = if (serverState.conflict) "다른 기기의 변경과 충돌 · 미저장 변경이 있습니다."
+            else if (serverState.dirty) "서버 저장 대기 중…" else "서버 저장 완료"
+        syncSignals.trySend(Unit)
     }
 
     fun translateMissing(setId: String, cards: List<Sentence>) {
@@ -211,35 +224,59 @@ fun SentenceLabApp() {
 
     LaunchedEffect(sessionToken) {
         val token = sessionToken ?: return@LaunchedEffect
-        syncSignals.onStart { emit(Unit) }.debounce(650L).collect {
-            val localStart = sets
-            syncStatus = "자동 동기화 중…"
+        syncSignals.trySend(Unit)
+        for (signal in syncSignals) {
+            if (serverState.conflict) continue
+            syncBusy = true
+            syncStatus = if (serverState.dirty || serverState.attempted != null)
+                "서버 저장 중…" else "서버 데이터 확인 중…"
             try {
-                val result = syncEngine.reconcile(token, localStart)
-                val latest = sets
-                val combined = if (latest == localStart) result.sets
-                    else StudyMerge.merge(localStart, latest, result.sets)
-                if (combined != latest) save(combined)
-                syncStatus = "자동 동기화 완료 · 서버 버전 " + result.revision
+                // Recover a lost upload response by reading the authoritative server.
+                // Never blindly retry a write against a newer revision.
+                if (serverState.attempted != null || !serverState.dirty) {
+                    val remote = api.getSnapshot(token)
+                    serverState = serverState.observe(remote)
+                }
+                val upload = serverState.nextUpload()
+                if (upload != null) {
+                    serverState = serverState.beginUpload(upload)
+                    val revision = api.upload(token, upload.revision, upload.sets)
+                    serverState = serverState.uploaded(upload, revision)
+                }
+                syncStatus = when {
+                    serverState.conflict -> "다른 기기의 변경과 충돌 · 미저장 변경이 있습니다."
+                    serverState.dirty -> "서버 저장 대기 중…"
+                    else -> "서버 저장 완료 · 버전 " + serverState.acknowledged?.revision
+                }
+                if (serverState.dirty && !serverState.conflict) syncSignals.trySend(Unit)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: CloudConflictException) {
+                syncStatus = "서버 변경 확인 중…"
+                syncSignals.trySend(Unit)
             } catch (e: Exception) {
-                syncStatus = "동기화 보류 · " +
-                    (e.localizedMessage ?: "네트워크를 확인하세요.") +
-                    " · 기기 데이터는 유지됩니다."
+                syncStatus = (if (serverState.dirty || serverState.attempted != null)
+                    "저장 실패 · 앱을 닫으면 미저장 변경을 잃을 수 있습니다. "
+                    else "서버 불러오기 실패 · ") +
+                    (e.localizedMessage ?: "네트워크를 확인하세요.")
+            } finally {
+                syncBusy = false
             }
         }
     }
 
     LaunchedEffect(sessionToken) {
-        while (sessionToken != null) {
-            delay(60_000L)
-            syncSignals.tryEmit(Unit)
+        if (sessionToken == null) return@LaunchedEffect
+        while (true) {
+            delay(30_000L)
+            syncSignals.trySend(Unit)
         }
     }
 
     val activity = context as? ComponentActivity
     DisposableEffect(activity) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) syncSignals.tryEmit(Unit)
+            if (event == Lifecycle.Event.ON_RESUME) syncSignals.trySend(Unit)
         }
         activity?.lifecycle?.addObserver(observer)
         onDispose { activity?.lifecycle?.removeObserver(observer) }
@@ -254,11 +291,22 @@ fun SentenceLabApp() {
         else currentSetId = null
     }
     BackHandler(enabled = selected != null) { goBack() }
+    BackHandler(enabled = selected == null && (serverState.dirty || serverState.attempted != null)) {
+        syncStatus = "미저장 변경이 있습니다. 서버 저장 후 앱을 종료하세요."
+        syncSignals.trySend(Unit)
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(title, maxLines = 1) },
+                title = {
+                    Column {
+                        Text(title, maxLines = 1)
+                        if (sessionToken != null && selected != null) {
+                            Text(syncStatus, style = MaterialTheme.typography.labelSmall, maxLines = 2)
+                        }
+                    }
+                },
                 navigationIcon = {
                     if (selected != null) {
                         TextButton(onClick = { goBack() }) { Text("‹ 뒤로") }
@@ -275,12 +323,12 @@ fun SentenceLabApp() {
                     onOpen = { currentSetId = it },
                     sessionToken = sessionToken,
                     syncStatus = syncStatus,
-                    onSyncNow = { syncSignals.tryEmit(Unit) },
-                    onSessionChanged = { token ->
-                        sessionToken = token
-                        syncStatus = if (token == null) "로그인하면 자동 동기화됩니다."
-                            else "자동 동기화 준비 중"
-                    }
+                    onSyncNow = { syncSignals.trySend(Unit) },
+                    dataReady = serverState.ready,
+                    canLogout = !serverState.dirty && serverState.attempted == null && !translationBusy && !fileImportBusy,
+                    canDiscard = (serverState.dirty || serverState.attempted != null) && !syncBusy && !translationBusy && !fileImportBusy,
+                    onDiscard = { discardDialog = true },
+                    onSessionChanged = onSessionChanged
                 )
                 studyMode != null -> StudyScreen(
                     set = selected,
@@ -332,6 +380,25 @@ fun SentenceLabApp() {
                 )
             }
         }
+    }
+
+    if (discardDialog) {
+        AlertDialog(
+            onDismissRequest = { discardDialog = false },
+            title = { Text("미저장 변경을 버릴까요?") },
+            text = { Text("서버에 이미 저장된 데이터는 삭제하지 않습니다. 이 기기의 아직 저장되지 않은 변경만 버리고 서버에서 다시 불러옵니다.") },
+            confirmButton = {
+                TextButton(enabled = !syncBusy && !translationBusy && !fileImportBusy, onClick = {
+                    discardDialog = false
+                    serverState = ServerStudyState()
+                    currentSetId = null
+                    studyMode = null
+                    syncStatus = "서버 데이터 다시 불러오는 중…"
+                    syncSignals.trySend(Unit)
+                }) { Text("변경 버리기") }
+            },
+            dismissButton = { TextButton(onClick = { discardDialog = false }) { Text("취소") } }
+        )
     }
 
     val directCard = selected?.cards?.firstOrNull { it.id == directStudyCardId }
@@ -577,6 +644,10 @@ private fun HomeScreen(
     sessionToken: String?,
     syncStatus: String,
     onSyncNow: () -> Unit,
+    dataReady: Boolean,
+    canLogout: Boolean,
+    canDiscard: Boolean,
+    onDiscard: () -> Unit,
     onSessionChanged: (String?) -> Unit
 ) {
     Column(
@@ -587,10 +658,22 @@ private fun HomeScreen(
             sessionToken = sessionToken,
             syncStatus = syncStatus,
             onSyncNow = onSyncNow,
+            canLogout = canLogout,
             onSessionChanged = onSessionChanged
         )
+        if (canDiscard) {
+            OutlinedButton(onClick = onDiscard) { Text("미저장 변경 버리고 서버에서 다시 불러오기") }
+        }
         Text("내 문장 세트", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("네트워크 연결 없이 모든 학습 내용을 기기에 저장합니다.")
+        if (sessionToken == null) {
+            Text("로그인하면 해당 계정의 서버 문장을 불러옵니다.")
+            return@Column
+        }
+        if (!dataReady) {
+            Text("서버 데이터가 아직 준비되지 않았습니다.")
+            return@Column
+        }
+        Text("문장과 학습 기록은 서버에 저장됩니다.")
         Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) { Text("+ 새 세트") }
         if (sets.isEmpty()) Text("아직 세트가 없습니다. 새 세트를 만들어 시작하세요.")
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
