@@ -23,14 +23,14 @@ Alternatively from this directory, with Wrangler already authenticated:
 `npx wrangler pages deploy public --project-name sentencelab`.
 
 Run the mock regression test: `node test-proxy.mjs`.
-After deployment, verify `https://sentencelab.pages.dev/sentencelab/health`
+After deployment, verify `https://sentencelab-73a.pages.dev/sentencelab/health`
 from a connection without VPN and check an authentication challenge.
 If the assigned hostname differs, use that hostname instead.
 
-Only after successful verification, change the GitHub Actions repository
-variable API_BASE_URL to https://sentencelab.pages.dev/sentencelab and build
-the APK with the existing stable signing key. The old URL remains the current
-default until the new deployment is verified; no existing APK is silently changed.
+The verified production API URL is now https://sentencelab-73a.pages.dev/sentencelab.
+Android builds use this URL in gradle.properties and the CI build environment.
+Rebuild the APK with the existing stable signing key; existing installed APKs
+retain their previous endpoint until updated.
 
 The v0.10.0 backend schema upgrade is a separate deployment prerequisite for
 synchronizing mode-specific completion records.
