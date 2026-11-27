@@ -128,6 +128,11 @@ private fun ServerStudyScreen(
 ) {
     val context = LocalContext.current
     val api = remember { CloudApi() }
+    // Only UI preferences are persisted locally, never study data.
+    val settings = remember { context.applicationContext.getSharedPreferences("study_preferences", android.content.Context.MODE_PRIVATE) }
+    var orderSplitEnabled by remember { mutableStateOf(settings.getBoolean("order_split_enabled", false)) }
+    var orderWordCount by remember { mutableIntStateOf(settings.getInt("order_word_count", 8).coerceAtLeast(1)) }
+    var settingsOpen by remember { mutableStateOf(false) }
     var serverState by remember { mutableStateOf(ServerStudyState()) }
     val sets by remember { derivedStateOf { serverState.sets } }
     var syncStatus by remember { mutableStateOf(if (sessionToken == null) "로그인이 필요합니다." else "서버 데이터 불러오는 중…") }
@@ -332,6 +337,11 @@ private fun ServerStudyScreen(
                     if (selected != null) {
                         TextButton(onClick = { goBack() }) { Text("‹ 뒤로") }
                     }
+                },
+                actions = {
+                    if (selected == null && studyMode == null) {
+                        TextButton(onClick = { settingsOpen = true }) { Text("설정") }
+                    }
                 }
             )
         }
@@ -360,6 +370,7 @@ private fun ServerStudyScreen(
                     set = selected,
                     sessionIds = sessionIds,
                     mode = studyMode!!,
+                    orderLimit = if (orderSplitEnabled) orderWordCount else null,
                     onGrade = { cardId, isCorrect ->
                         save(sets.map { set ->
                             if (set.id != selected.id) set
@@ -406,6 +417,21 @@ private fun ServerStudyScreen(
                 )
             }
         }
+    }
+
+    if (settingsOpen) {
+        StudySettingsDialog(
+            splitEnabled = orderSplitEnabled,
+            wordCount = orderWordCount,
+            onDismiss = { settingsOpen = false },
+            onSave = { enabled, count ->
+                orderSplitEnabled = enabled
+                orderWordCount = count
+                settings.edit().putBoolean("order_split_enabled", enabled)
+                    .putInt("order_word_count", count).apply()
+                settingsOpen = false
+            }
+        )
     }
 
     if (discardDialog) {
@@ -660,6 +686,59 @@ private fun ServerStudyScreen(
             }
         )
     }
+}
+
+@Composable
+private fun StudySettingsDialog(
+    splitEnabled: Boolean,
+    wordCount: Int,
+    onDismiss: () -> Unit,
+    onSave: (Boolean, Int) -> Unit
+) {
+    var enabled by remember { mutableStateOf(splitEnabled) }
+    var countText by remember { mutableStateOf(wordCount.toString()) }
+    val validCount = countText.toIntOrNull()?.takeIf { it > 0 }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("설정") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("어순 배열", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Text("단어 수로 문장 분할")
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+                if (enabled) {
+                    OutlinedTextField(
+                        value = countText,
+                        onValueChange = { countText = it.filter { ch -> ch in '0'..'9' } },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("구간당 단어 수") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = validCount == null,
+                        supportingText = {
+                            Text(if (validCount == null) "1 이상의 정수를 입력하세요."
+                                else "지정한 단어 수씩 나누어 학습합니다.")
+                        }
+                    )
+                } else {
+                    Text("전체 문장의 단어를 한 번에 섞어 표시합니다.")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !enabled || validCount != null,
+                onClick = { onSave(enabled, validCount ?: wordCount) }
+            ) { Text("저장") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
+    )
 }
 
 @Composable
@@ -932,6 +1011,7 @@ private fun StudyScreen(
     set: StudySet,
     sessionIds: List<String>,
     mode: StudyMode,
+    orderLimit: Int?,
     onGrade: (String, Boolean) -> Unit,
     onClose: () -> Unit
 ) {
@@ -939,10 +1019,6 @@ private fun StudyScreen(
     var position by remember(sessionIds, mode) { mutableIntStateOf(0) }
     var blankDifficulty by remember(sessionIds, mode) { mutableStateOf(BlankDifficulty.NORMAL) }
     var blankDifficultyConfirmed by remember(sessionIds, mode) { mutableStateOf(false) }
-    var orderSplitEnabled by remember(sessionIds, mode) { mutableStateOf(false) }
-    var orderWordCount by remember(sessionIds, mode) { mutableStateOf("8") }
-    var orderSettingsConfirmed by remember(sessionIds, mode) { mutableStateOf(false) }
-    val orderLimit = if (orderSplitEnabled) orderWordCount.toIntOrNull()?.takeIf { it > 0 } else null
 
     val context = LocalContext.current
     var ttsReady by remember { mutableStateOf(false) }
@@ -968,35 +1044,7 @@ private fun StudyScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        if (mode == StudyMode.ORDER && !orderSettingsConfirmed && cards.isNotEmpty()) {
-            Text("어순 배열 설정", style = MaterialTheme.typography.headlineSmall)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-            ) {
-                Text("단어 수로 문장 분할")
-                Switch(checked = orderSplitEnabled, onCheckedChange = { orderSplitEnabled = it })
-            }
-            if (orderSplitEnabled) {
-                OutlinedTextField(
-                    value = orderWordCount,
-                    onValueChange = { orderWordCount = it.filter { ch -> ch in '0'..'9' } },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("구간당 단어 수") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    isError = orderLimit == null,
-                    supportingText = { Text(if (orderLimit == null) "1 이상의 정수를 입력하세요." else "지정한 단어 수씩 나누어 학습합니다.") }
-                )
-            } else {
-                Text("전체 문장의 단어를 한 번에 섞어 표시합니다.")
-            }
-            Button(
-                enabled = !orderSplitEnabled || orderLimit != null,
-                onClick = { orderSettingsConfirmed = true }
-            ) { Text("학습 시작") }
-        } else if (mode == StudyMode.BLANK && !blankDifficultyConfirmed) {
+        if (mode == StudyMode.BLANK && !blankDifficultyConfirmed) {
             Text("빈칸 난이도", style = MaterialTheme.typography.headlineSmall)
             BlankDifficulty.entries.forEach { level ->
                 OutlinedButton(onClick = { blankDifficulty = level }, modifier = Modifier.fillMaxWidth()) {
