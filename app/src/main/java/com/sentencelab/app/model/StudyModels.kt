@@ -60,10 +60,13 @@ fun validChunks(english: String, parts: List<String>): Boolean =
     parts.isNotEmpty() && normalized(english) == normalized(parts.joinToString(" "))
 
 
-/** Split long sentences into consecutive eight-word chunks, keeping the final remainder. */
-fun orderWordGroups(english: String): List<List<String>> {
+/** No splitting by default; optional positive word limit retains the final remainder. */
+fun orderWordGroups(english: String, wordsPerGroup: Int? = null): List<List<String>> {
+    require(wordsPerGroup == null || wordsPerGroup > 0)
     val words = english.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
-    return words.chunked(8)
+    if (words.isEmpty()) return emptyList()
+    return if (wordsPerGroup == null || wordsPerGroup >= words.size) listOf(words)
+        else words.chunked(wordsPerGroup)
 }
 
 /** Duplicate words are valid choices for the next position, regardless of their source index. */

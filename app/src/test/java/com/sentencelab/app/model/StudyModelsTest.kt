@@ -35,13 +35,13 @@ class StudyModelsTest {
     }
 
     @Test fun nineWordsSplitEightPlusOne() {
-        val groups = orderWordGroups("one two three four five six seven eight nine")
+        val groups = orderWordGroups("one two three four five six seven eight nine", 8)
         assertEquals(listOf(8, 1), groups.map { it.size })
     }
 
     @Test fun longerSentencesUseConsecutiveEightWordChunks() {
         val words = (1..18).joinToString(" ") { "word" + it }
-        val groups = orderWordGroups(words)
+        val groups = orderWordGroups(words, 8)
         assertEquals(listOf(8, 8, 2), groups.map { it.size })
         assertEquals(words, groups.flatten().joinToString(" "))
         assertTrue(groups.all { it.size <= 8 })
@@ -103,5 +103,28 @@ class StudyModelsTest {
         val card = Sentence(english = "Legacy sentence.", korean = "이전 문장", attempts = 1, correct = 1, completed = true)
         assertEquals(1, eligibleForStudy(listOf(card), StudyMode.BLANK, false).size)
         assertEquals(1, card.correct)
+    }
+
+    @Test fun splittingIsDisabledByDefault() {
+        val sentence = (1..24).joinToString(" ") { "word" + it }
+        val groups = orderWordGroups(sentence)
+        assertEquals(listOf(24), groups.map { it.size })
+        assertEquals(sentence, groups.single().joinToString(" "))
+    }
+
+    @Test fun customLimitKeepsRemainderAndOrder() {
+        val sentence = (1..13).joinToString(" ") { "word" + it }
+        val groups = orderWordGroups(sentence, 5)
+        assertEquals(listOf(5, 5, 3), groups.map { it.size })
+        assertEquals(sentence, groups.flatten().joinToString(" "))
+        assertEquals(listOf(13), orderWordGroups(sentence, 20).map { it.size })
+        assertEquals(13, orderWordGroups(sentence, 1).size)
+        assertTrue(orderWordGroups("   ").isEmpty())
+        assertTrue(orderWordGroups("   ", 5).isEmpty())
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun zeroGroupLimitIsRejected() {
+        orderWordGroups("One two", 0)
     }
 }

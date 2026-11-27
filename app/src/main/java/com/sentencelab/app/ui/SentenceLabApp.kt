@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -39,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -56,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.sentencelab.app.data.DocumentImporter
@@ -936,6 +939,10 @@ private fun StudyScreen(
     var position by remember(sessionIds, mode) { mutableIntStateOf(0) }
     var blankDifficulty by remember(sessionIds, mode) { mutableStateOf(BlankDifficulty.NORMAL) }
     var blankDifficultyConfirmed by remember(sessionIds, mode) { mutableStateOf(false) }
+    var orderSplitEnabled by remember(sessionIds, mode) { mutableStateOf(false) }
+    var orderWordCount by remember(sessionIds, mode) { mutableStateOf("8") }
+    var orderSettingsConfirmed by remember(sessionIds, mode) { mutableStateOf(false) }
+    val orderLimit = if (orderSplitEnabled) orderWordCount.toIntOrNull()?.takeIf { it > 0 } else null
 
     val context = LocalContext.current
     var ttsReady by remember { mutableStateOf(false) }
@@ -961,7 +968,35 @@ private fun StudyScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        if (mode == StudyMode.BLANK && !blankDifficultyConfirmed) {
+        if (mode == StudyMode.ORDER && !orderSettingsConfirmed && cards.isNotEmpty()) {
+            Text("어순 배열 설정", style = MaterialTheme.typography.headlineSmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text("단어 수로 문장 분할")
+                Switch(checked = orderSplitEnabled, onCheckedChange = { orderSplitEnabled = it })
+            }
+            if (orderSplitEnabled) {
+                OutlinedTextField(
+                    value = orderWordCount,
+                    onValueChange = { orderWordCount = it.filter { ch -> ch in '0'..'9' } },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("구간당 단어 수") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    isError = orderLimit == null,
+                    supportingText = { Text(if (orderLimit == null) "1 이상의 정수를 입력하세요." else "지정한 단어 수씩 나누어 학습합니다.") }
+                )
+            } else {
+                Text("전체 문장의 단어를 한 번에 섞어 표시합니다.")
+            }
+            Button(
+                enabled = !orderSplitEnabled || orderLimit != null,
+                onClick = { orderSettingsConfirmed = true }
+            ) { Text("학습 시작") }
+        } else if (mode == StudyMode.BLANK && !blankDifficultyConfirmed) {
             Text("빈칸 난이도", style = MaterialTheme.typography.headlineSmall)
             BlankDifficulty.entries.forEach { level ->
                 OutlinedButton(onClick = { blankDifficulty = level }, modifier = Modifier.fillMaxWidth()) {
@@ -1000,6 +1035,7 @@ private fun StudyScreen(
                     )
                     StudyMode.ORDER -> OrderQuestion(
                         card = card,
+                        wordsPerGroup = orderLimit,
                         onGrade = { onGrade(card.id, it) },
                         onNext = { position += 1 }
                     )
@@ -1054,10 +1090,13 @@ private fun FlashcardQuestion(
 @Composable
 private fun OrderQuestion(
     card: Sentence,
+    wordsPerGroup: Int?,
     onGrade: (Boolean) -> Unit,
     onNext: () -> Unit
 ) {
-    val groups = remember(card.id) { com.sentencelab.app.model.orderWordGroups(card.english) }
+    val groups = remember(card.id, card.english, wordsPerGroup) {
+        com.sentencelab.app.model.orderWordGroups(card.english, wordsPerGroup)
+    }
     var groupIndex by remember(card.id) { mutableIntStateOf(0) }
     var selected by remember(card.id, groupIndex) { mutableStateOf<List<Int>>(emptyList()) }
     var hadMistake by remember(card.id) { mutableStateOf(false) }
